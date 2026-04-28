@@ -1,17 +1,11 @@
 import { CheckCircle, Info, XCircle } from 'lucide-react'
-
-const ICONS = {
-  success: <CheckCircle size={15} color="#3FB950" />,
-  info:    <Info size={15} color="var(--accent)" />,
-  error:   <XCircle size={15} color="#FF7B72" />,
-}
-
+const ICONS = { success:<CheckCircle size={14}/>, info:<Info size={14}/>, error:<XCircle size={14}/> }
 export default function Toast({ toasts }) {
   return (
-    <div className="toast-container">
-      {toasts.map(t => (
+    <div className="toast-wrap">
+      {toasts.map(t=>(
         <div key={t.id} className={`toast ${t.type}`}>
-          {ICONS[t.type] || ICONS.info}
+          {ICONS[t.type]||ICONS.info}
           <span>{t.msg}</span>
         </div>
       ))}

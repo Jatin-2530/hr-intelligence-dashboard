@@ -1,154 +1,135 @@
-import { AlertCircle, RefreshCw, Clock, BookOpen } from 'lucide-react'
+import { useState } from 'react'
+import { AlertCircle, RefreshCw, BookOpen, CalendarDays, Clock } from 'lucide-react'
 import NewsCard from './NewsCard.jsx'
+import ArticleModal from './ArticleModal.jsx'
 import { CATEGORIES } from '../App.jsx'
 
-const DATE_FILTERS = [
-  { id: 'today',  label: 'Today' },
-  { id: '3days',  label: 'Last 3 days' },
-  { id: '7days',  label: 'Last 7 days' },
-]
-
-function highlight(text, query) {
-  if (!query || !query.trim()) return text
-  const parts = text.split(new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'))
-  return parts.map((p, i) =>
-    p.toLowerCase() === query.toLowerCase()
-      ? <mark key={i}>{p}</mark>
-      : p
-  )
+function fmtDay(dateStr) {
+  const today = new Date().toISOString().split('T')[0]
+  const yest  = new Date(Date.now() - 86400000).toISOString().split('T')[0]
+  if (dateStr === today) return 'Today'
+  if (dateStr === yest)  return 'Yesterday'
+  return new Date(dateStr).toLocaleDateString('en-US', { weekday:'long', month:'short', day:'numeric' })
 }
 
 export default function NewsFeed({
   articles, activeTab, savedIds, onToggleSave,
   loading, loadPhase, error, onRetry,
-  searchQuery, dateFilter, setDateFilter, counts
+  searchQuery, viewDate, setViewDate, pastDays
 }) {
+  const [openArticle, setOpenArticle] = useState(null)
+
   const cat = CATEGORIES.find(c => c.id === activeTab) || CATEGORIES[0]
 
-  // Derive title and subtitle
-  let title = cat.label
-  let subtitle = ''
-  if (activeTab === 'all') {
-    subtitle = `${articles.length} articles across all domains`
-  } else if (activeTab === 'saved') {
-    title = 'Saved Articles'
-    subtitle = `${articles.length} bookmarked articles`
-  } else {
-    subtitle = `${articles.length} articles in this domain`
-  }
+  // Title
+  let title = activeTab === 'all' ? 'Daily Intelligence Brief'
+    : activeTab === 'saved' ? 'Saved Articles'
+    : cat.label
+  let subtitle = viewDate === new Date().toISOString().split('T')[0]
+    ? `${articles.length} articles · ${fmtDay(viewDate)}`
+    : `${articles.length} articles · Archive — ${fmtDay(viewDate)}`
 
-  if (loading) {
-    return (
-      <div className="state-screen">
-        <div className="loading-spinner" />
-        <div className="loading-bar-wrap">
-          <div className="loading-bar" />
-        </div>
-        <h3>Building Your Daily Brief</h3>
-        <p style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{loadPhase}</p>
-      </div>
-    )
-  }
+  if (loading) return (
+    <div className="state-screen">
+      <div className="loading-spinner" />
+      <div className="loading-bar-wrap"><div className="loading-bar" /></div>
+      <div className="state-title">Building Your Daily Brief</div>
+      <div className="state-subtitle">{loadPhase}</div>
+    </div>
+  )
 
-  if (error) {
-    return (
-      <div className="state-screen">
-        <AlertCircle size={40} color="#FF7B72" />
-        <h3>Couldn't load news</h3>
-        <p>{error}</p>
-        <button className="btn btn-primary" onClick={onRetry}>
-          <RefreshCw size={14} /> Try Again
-        </button>
-      </div>
-    )
-  }
+  if (error) return (
+    <div className="state-screen">
+      <AlertCircle size={44} color="var(--accent)" />
+      <div className="state-title">Couldn't load articles</div>
+      <div className="state-subtitle">{error}</div>
+      <button className="btn btn-primary" onClick={onRetry}><RefreshCw size={13} /> Retry</button>
+    </div>
+  )
 
-  if (articles.length === 0 && searchQuery) {
-    return (
-      <div className="state-screen">
-        <BookOpen size={40} color="var(--text-muted)" />
-        <h3>No results for "{searchQuery}"</h3>
-        <p>Try a different keyword or clear the search.</p>
+  if (articles.length === 0 && !loading) return (
+    <div className="state-screen">
+      <BookOpen size={44} color="var(--border-strong)" />
+      <div className="state-title">{searchQuery ? `No results for "${searchQuery}"` : 'No articles here'}</div>
+      <div className="state-subtitle">
+        {searchQuery ? 'Try a different keyword.' : 'Click refresh to load your daily brief.'}
       </div>
-    )
-  }
+      {!searchQuery && <button className="btn btn-primary" onClick={onRetry}><RefreshCw size={13} /> Load News</button>}
+    </div>
+  )
 
-  if (articles.length === 0) {
-    return (
-      <div className="state-screen">
-        <BookOpen size={40} color="var(--text-muted)" />
-        <h3>No articles here yet</h3>
-        <p>Click refresh to load today's HR intelligence brief.</p>
-        <button className="btn btn-primary" onClick={onRetry}>
-          <RefreshCw size={14} /> Load News
-        </button>
-      </div>
-    )
-  }
+  // Group by category when showing all
+  const catGroups = activeTab === 'all' || activeTab === 'saved'
+    ? CATEGORIES.filter(c => c.id !== 'all').map(c => ({
+        ...c,
+        articles: articles.filter(a => a.category === c.id)
+      })).filter(c => c.articles.length > 0)
+    : [{ ...cat, articles }]
 
   return (
     <>
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">{title}</h1>
-          <p className="page-subtitle">{subtitle}</p>
-        </div>
-        <div className="filter-bar">
-          <Clock size={13} color="var(--text-muted)" />
-          {DATE_FILTERS.map(f => (
-            <button
-              key={f.id}
-              className={`filter-chip ${dateFilter === f.id ? 'active' : ''}`}
-              onClick={() => setDateFilter(f.id)}
-            >
-              {f.label}
-            </button>
-          ))}
+      {/* Archive bar */}
+      <div className="archive-bar">
+        {pastDays.map((d, i) => (
+          <button
+            key={d}
+            className={`archive-day-btn ${viewDate === d ? 'active' : ''}`}
+            onClick={() => setViewDate(d)}
+          >
+            {i === 0 ? 'Today' : i === 1 ? 'Yesterday' : new Date(d).toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' })}
+          </button>
+        ))}
+      </div>
+
+      {/* Page masthead */}
+      <div className="page-masthead">
+        <div className="page-masthead-left">
+          <h1>{title}</h1>
+          <p>{subtitle}</p>
         </div>
       </div>
 
-      {activeTab === 'all' ? (
-        /* Group by category */
-        CATEGORIES.filter(c => c.id !== 'all').map(cat => {
-          const catArticles = articles.filter(a => a.category === cat.id)
-          if (catArticles.length === 0) return null
-          return (
-            <section key={cat.id}>
-              <div className="section-header">
-                <h2 className="section-title">
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: cat.color, display: 'inline-block' }} />
-                  {cat.label}
-                  <span className="section-count">{catArticles.length}</span>
-                </h2>
-              </div>
-              <div className="news-grid">
-                {catArticles.map((a, i) => (
-                  <NewsCard
-                    key={a.id}
-                    article={a}
-                    isSaved={savedIds.includes(a.id)}
-                    onToggleSave={onToggleSave}
-                    searchQuery={searchQuery}
-                    style={{ animationDelay: `${i * 40}ms` }}
-                  />
-                ))}
-              </div>
-            </section>
-          )
-        })
-      ) : (
-        <div className="news-grid">
-          {articles.map((a, i) => (
-            <NewsCard
-              key={a.id}
-              article={a}
-              isSaved={savedIds.includes(a.id)}
-              onToggleSave={onToggleSave}
-              searchQuery={searchQuery}
-              style={{ animationDelay: `${i * 40}ms` }}
-            />
-          ))}
-        </div>
+      {/* News sections */}
+      <div className="news-wrapper">
+        {catGroups.map(group => (
+          <section key={group.id} className="news-section">
+            <div className="section-masthead">
+              <span className="sec-badge" style={{
+                background: `${group.color}18`,
+                color: group.color,
+              }}>
+                {group.id === 'LD' ? 'L&D' : group.id}
+              </span>
+              <span className="sec-label">{group.label}</span>
+              <span className="sec-count">{group.articles.length} articles</span>
+            </div>
+
+            <div className="newspaper-grid">
+              {group.articles.map((a, i) => (
+                <NewsCard
+                  key={a.id}
+                  article={a}
+                  isSaved={savedIds.includes(a.id)}
+                  onToggleSave={onToggleSave}
+                  onOpen={setOpenArticle}
+                  searchQuery={searchQuery}
+                  featured={i === 0}
+                  idx={i}
+                />
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+
+      {/* Article modal */}
+      {openArticle && (
+        <ArticleModal
+          article={openArticle}
+          isSaved={savedIds.includes(openArticle.id)}
+          onToggleSave={onToggleSave}
+          onClose={() => setOpenArticle(null)}
+        />
       )}
     </>
   )
