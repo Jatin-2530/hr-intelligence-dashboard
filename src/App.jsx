@@ -10,6 +10,7 @@ const CACHE_KEY    = 'hrid_news_cache'
 const NOTES_KEY    = 'hrid_notes'
 const SAVED_KEY    = 'hrid_saved'
 const THEME_KEY    = 'hrid_theme'
+const APIKEY_KEY   = 'hrid_gemini_key'
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000  // 24 hours
 
 export const CATEGORIES = [
@@ -30,15 +31,15 @@ export const TAG_COLORS = {
 
 const SUGGESTED_TAGS = ['Automotive','Finance','Consulting','Tech','FMCG','Pharma','Banking']
 
-// ── Claude API news prompt ────────────────────────────
-async function fetchNewsFromClaude(signal) {
+// ── Gemini API news fetch ─────────────────────────────
+async function fetchNewsFromGemini(apiKey, signal) {
   const today = new Date().toLocaleDateString('en-US', { weekday:'long', year:'numeric', month:'long', day:'numeric' })
-  
+
   const prompt = `You are an HR intelligence curator. Generate 20 realistic, insightful HR news articles for ${today}.
 
-Return ONLY a valid JSON array (no markdown, no preamble) with exactly 20 objects. Each object must have:
+Return ONLY a valid JSON array (no markdown, no preamble, no backticks) with exactly 20 objects. Each object must have:
 - id: unique string like "art_001"
-- title: compelling news headline (max 12 words)  
+- title: compelling news headline (max 12 words)
 - summary: 2-sentence summary with concrete data points (percentages, company names, study references)
 - source: one of ["SHRM", "Harvard Business Review", "People Matters", "HR Dive", "Workforce Magazine", "McKinsey & Company", "Deloitte Insights", "LinkedIn Talent Solutions", "Gartner HR", "MIT Sloan Management Review", "Economic Times HR", "Business Today"]
 - url: "#"
@@ -46,23 +47,25 @@ Return ONLY a valid JSON array (no markdown, no preamble) with exactly 20 object
 - category: one of exactly ["TA","HRBP","MIS","LD","RR"]
 - readTime: number (2-6)
 
-Distribute categories: 4 TA, 4 HRBP, 4 MIS, 4 LD, 4 RR. 
-Topics should cover: hiring trends, workforce analytics, DEI, skills gaps, pay equity, engagement, AI in HR, remote work, leadership development, compensation benchmarking, succession planning, learning tech, performance management, talent marketplace. Use realistic company names (Infosys, Wipro, Microsoft, Google, Tata, Reliance, Unilever, etc.) and cite plausible research statistics.`
+Distribute: 4 TA, 4 HRBP, 4 MIS, 4 LD, 4 RR.
+Topics: hiring trends, workforce analytics, DEI, skills gaps, pay equity, AI in HR, remote work, leadership development, compensation benchmarking, succession planning, learning tech, performance management. Use realistic company names (Infosys, Wipro, Microsoft, Google, Tata, Reliance, Unilever, etc.) and cite plausible research statistics.`
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    signal,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4000,
-      messages: [{ role: 'user', content: prompt }]
-    })
-  })
-  
-  if (!res.ok) throw new Error(`API error ${res.status}`)
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+    }
+  )
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err?.error?.message || `API error ${res.status}`)
+  }
   const data = await res.json()
-  const raw  = data.content?.[0]?.text || ''
+  const raw  = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
   const clean = raw.replace(/```json|```/g, '').trim()
   return JSON.parse(clean)
 }
@@ -96,6 +99,8 @@ function saveSaved(ids) {
 // ── App ──────────────────────────────────────────────
 export default function App() {
   const [theme,        setTheme]        = useState(() => localStorage.getItem(THEME_KEY) || 'dark')
+  const [apiKey,       setApiKey]       = useState(() => localStorage.getItem(APIKEY_KEY) || '')
+  const [keyInput,     setKeyInput]     = useState('')
   const [activeTab,    setActiveTab]    = useState('all')
   const [searchQuery,  setSearchQuery]  = useState('')
   const [dateFilter,   setDateFilter]   = useState('today')
@@ -130,6 +135,7 @@ export default function App() {
 
   // Fetch news
   const fetchNews = useCallback(async (force = false) => {
+    if (!apiKey) return
     if (!force) {
       const cached = loadCache()
       if (cached) {
@@ -152,7 +158,7 @@ export default function App() {
     setTimeout(() => setLoadPhase('Finalising your daily brief…'), 4200)
 
     try {
-      const data = await fetchNewsFromClaude(abortRef.current.signal)
+      const data = await fetchNewsFromGemini(apiKey, abortRef.current.signal)
       setArticles(data)
       saveCache(data)
       const now = new Date()
@@ -167,7 +173,7 @@ export default function App() {
       setLoading(false)
       setLoadPhase('')
     }
-  }, [toast])
+  }, [apiKey, toast])
 
   useEffect(() => { fetchNews(false) }, [fetchNews])
 
@@ -218,6 +224,65 @@ export default function App() {
     toast('Note deleted', 'error')
   }, [toast])
 
+  function saveKey() {
+    const k = keyInput.trim()
+    if (!k) return
+    localStorage.setItem(APIKEY_KEY, k)
+    setApiKey(k)
+  }
+
+  function clearKey() {
+    localStorage.removeItem(APIKEY_KEY)
+    localStorage.removeItem(CACHE_KEY)
+    setApiKey('')
+    setArticles([])
+    setKeyInput('')
+  }
+
+  // Show API key setup if no key saved
+  if (!apiKey) {
+    return (
+      <div className="app-wrapper" style={{ justifyContent: 'center', alignItems: 'center' }}>
+        <div style={{
+          background: 'var(--bg-surface)', border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-lg)', padding: '40px', maxWidth: 440, width: '90%',
+          display: 'flex', flexDirection: 'column', gap: 20
+        }}>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <span style={{ width:10, height:10, background:'var(--accent)', borderRadius:'50%' }} />
+            <span style={{ fontFamily:'var(--font-display)', fontWeight:700, fontSize:18 }}>HR Intel Setup</span>
+          </div>
+          <p style={{ fontSize:13, color:'var(--text-secondary)', lineHeight:1.6 }}>
+            Enter your <strong style={{color:'var(--text-primary)'}}>Gemini API key</strong> to power the daily news feed.
+            It's stored only in your browser — never sent anywhere except Google's API.
+          </p>
+          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            <label style={{ fontSize:11, fontFamily:'var(--font-mono)', color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.06em' }}>
+              Gemini API Key
+            </label>
+            <input
+              className="form-input"
+              type="password"
+              placeholder="AIzaSy..."
+              value={keyInput}
+              onChange={e => setKeyInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && saveKey()}
+              autoFocus
+            />
+          </div>
+          <button className="btn btn-primary" onClick={saveKey} disabled={!keyInput.trim()}>
+            Save & Load News
+          </button>
+          <p style={{ fontSize:11, color:'var(--text-muted)', textAlign:'center' }}>
+            Get a free key at{' '}
+            <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer"
+              style={{ color:'var(--accent)' }}>aistudio.google.com</a>
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="app-wrapper">
       <Header
@@ -228,6 +293,7 @@ export default function App() {
         onRefresh={() => fetchNews(true)}
         loading={loading}
         lastRefresh={lastRefresh}
+        onClearKey={clearKey}
       />
 
       <div className="app-body">
