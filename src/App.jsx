@@ -51,7 +51,7 @@ Distribute: 4 TA, 4 HRBP, 4 MIS, 4 LD, 4 RR.
 Topics: hiring trends, workforce analytics, DEI, skills gaps, pay equity, AI in HR, remote work, leadership development, compensation benchmarking, succession planning, learning tech, performance management. Use realistic company names (Infosys, Wipro, Microsoft, Google, Tata, Reliance, Unilever, etc.) and cite plausible research statistics.`
 
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
     {
       method: 'POST',
       signal,
