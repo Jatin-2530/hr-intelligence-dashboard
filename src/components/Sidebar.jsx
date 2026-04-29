@@ -1,7 +1,6 @@
 import {
   Newspaper, Users, Briefcase, BarChart3, GraduationCap, Gift,
-  Heart, Scale, Smile, Cpu, Globe, Star, StickyNote, Bookmark,
-  Trophy, TrendingUp
+  Heart, Scale, Smile, Cpu, Globe, Star, StickyNote, Bookmark, Trophy
 } from 'lucide-react'
 import { CATEGORIES } from '../App.jsx'
 
@@ -21,11 +20,27 @@ const ICONS = {
   CAREER: <Trophy size={14} />,
 }
 
+// Short display names that fit sidebar without truncation
+const SIDEBAR_LABELS = {
+  TA:     'Talent Acquisition',
+  HRBP:   'HR Business Partner',
+  MIS:    'HR Analytics & MIS',
+  LD:     'Learning & Dev (L&D)',
+  RR:     'Rewards & Recog.',
+  DEI:    'Diversity & Inclusion',
+  COMP:   'HR Law & Compliance',
+  WELL:   'Employee Wellbeing',
+  TECH:   'HR Technology',
+  LEAD:   'Leadership & Culture',
+  GLOB:   'Global HR Trends',
+  CAREER: 'Career & Interview Prep',
+}
+
 export default function Sidebar({ activeTab, setActiveTab, counts }) {
-  const main   = CATEGORIES.filter(c => c.id !== 'all')
+  const main = CATEGORIES.filter(c => c.id !== 'all')
   const special = [
-    { id: 'saved',  label: 'Saved Articles', icon: <Bookmark size={14} />, color: '#C05A1A' },
-    { id: 'notes',  label: 'My Notes',       icon: <StickyNote size={14} />, color: '#7C3D8C' },
+    { id: 'saved', label: 'Saved Articles', icon: <Bookmark size={14} />, color: '#C05A1A' },
+    { id: 'notes', label: 'My Notes',       icon: <StickyNote size={14} />, color: '#7C3D8C' },
   ]
 
   return (
@@ -36,14 +51,12 @@ export default function Sidebar({ activeTab, setActiveTab, counts }) {
 
       <div className="sidebar-section">
         <button
-          className={`nav-item ${activeTab==='all'?'active':''}`}
+          className={`nav-item ${activeTab === 'all' ? 'active' : ''}`}
           onClick={() => setActiveTab('all')}
         >
-          <span style={{ color: activeTab==='all' ? CATEGORIES[0].color : undefined }}>
-            {ICONS.all}
-          </span>
+          <span style={{ color: activeTab === 'all' ? '#9C8570' : undefined }}>{ICONS.all}</span>
           <span>All Sections</span>
-          <span className="nav-count">{counts.all||0}</span>
+          <span className="nav-count">{counts.all || 0}</span>
         </button>
       </div>
 
@@ -52,12 +65,12 @@ export default function Sidebar({ activeTab, setActiveTab, counts }) {
         {main.map(cat => (
           <button
             key={cat.id}
-            className={`nav-item ${activeTab===cat.id?'active':''}`}
+            className={`nav-item ${activeTab === cat.id ? 'active' : ''}`}
             onClick={() => setActiveTab(cat.id)}
           >
             <span className="cat-dot" style={{ background: cat.color }} />
-            <span>{cat.id === 'LD' ? 'L&D' : cat.id === 'CAREER' ? 'Career & Prep' : cat.label.split(' ')[0] + (cat.label.split(' ')[1] ? ' '+cat.label.split(' ')[1] : '')}</span>
-            <span className="nav-count">{counts[cat.id]||0}</span>
+            <span>{SIDEBAR_LABELS[cat.id] || cat.label}</span>
+            <span className="nav-count">{counts[cat.id] || 0}</span>
           </button>
         ))}
       </div>
@@ -67,12 +80,12 @@ export default function Sidebar({ activeTab, setActiveTab, counts }) {
         {special.map(s => (
           <button
             key={s.id}
-            className={`nav-item ${activeTab===s.id?'active':''}`}
+            className={`nav-item ${activeTab === s.id ? 'active' : ''}`}
             onClick={() => setActiveTab(s.id)}
           >
-            <span style={{ color: activeTab===s.id ? s.color : undefined }}>{s.icon}</span>
+            <span style={{ color: activeTab === s.id ? s.color : undefined }}>{s.icon}</span>
             <span>{s.label}</span>
-            {s.id==='saved' && <span className="nav-count">{counts.saved||0}</span>}
+            {s.id === 'saved' && <span className="nav-count">{counts.saved || 0}</span>}
           </button>
         ))}
       </div>

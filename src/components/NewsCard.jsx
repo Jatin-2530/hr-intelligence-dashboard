@@ -1,4 +1,4 @@
-import { Bookmark, BookmarkCheck } from 'lucide-react'
+import { Bookmark, BookmarkCheck, ExternalLink } from 'lucide-react'
 import { CAT_BG, CAT_COLOR, CAT_SHORT } from '../App.jsx'
 
 function hl(text, q) {
@@ -11,31 +11,31 @@ function hl(text, q) {
 }
 
 export default function NewsCard({ article, isSaved, onToggleSave, onOpen, searchQuery, featured, idx }) {
-  const { id, title, summary, source, date, category, readTime } = article
-  const color = CAT_COLOR[category] || 'var(--text-secondary)'
-  const bg    = CAT_BG[category]    || 'var(--bg-elevated)'
-  const short = CAT_SHORT[category] || category
-
-  const d = new Date(date)
-  const dateStr = d.toLocaleDateString('en-US', { month:'short', day:'numeric' })
+  const { id, title, summary, source, url, date, category, readTime } = article
+  const color    = CAT_COLOR[category] || 'var(--text-secondary)'
+  const bg       = CAT_BG[category]    || 'var(--bg-elevated)'
+  const short    = CAT_SHORT[category] || category
+  const hasUrl   = url && url !== '#' && url.startsWith('http')
+  const dateStr  = new Date(date + 'T00:00:00').toLocaleDateString('en-US', { month:'short', day:'numeric' })
 
   return (
     <article
       className={`news-card ${featured ? 'featured' : ''} ${isSaved ? 'saved' : ''}`}
-      style={{ animationDelay: `${(idx||0) * 30}ms` }}
+      style={{ animationDelay: `${(idx||0)*30}ms`, cursor:'pointer' }}
       onClick={() => onOpen(article)}
     >
       <div className="nc-top">
-        <span className="cat-badge" style={{ background: bg, color }}>
-          {short}
-        </span>
+        <span className="cat-badge" style={{ background: bg, color }}>{short}</span>
         <div className="nc-actions" onClick={e => e.stopPropagation()}>
-          <button
-            className={`icon-btn ${isSaved ? 'active' : ''}`}
-            onClick={() => onToggleSave(id)}
-            title={isSaved ? 'Unsave' : 'Save'}
-          >
-            {isSaved ? <BookmarkCheck size={11} /> : <Bookmark size={11} />}
+          {hasUrl && (
+            <a href={url} target="_blank" rel="noopener noreferrer"
+              className="icon-btn" title={`Open on ${source}`}
+              onClick={e => e.stopPropagation()}>
+              <ExternalLink size={11} />
+            </a>
+          )}
+          <button className={`icon-btn ${isSaved?'active':''}`} onClick={() => onToggleSave(id)} title={isSaved?'Unsave':'Save'}>
+            {isSaved ? <BookmarkCheck size={11}/> : <Bookmark size={11}/>}
           </button>
         </div>
       </div>
@@ -44,13 +44,16 @@ export default function NewsCard({ article, isSaved, onToggleSave, onOpen, searc
       <p className="nc-summary">{hl(summary, searchQuery)}</p>
 
       <div className="nc-footer">
-        <span className="nc-source">{hl(source, searchQuery)}</span>
+        <span className="nc-source" style={{ display:'flex', alignItems:'center', gap:4 }}>
+          {hasUrl && <ExternalLink size={9} style={{ color:'var(--accent)', flexShrink:0 }}/>}
+          {hl(source, searchQuery)}
+        </span>
         <div className="nc-meta">
           {readTime && <span>{readTime}m</span>}
           <span>{dateStr}</span>
         </div>
       </div>
-      <span className="read-more-hint">Read full article →</span>
+      <span className="read-more-hint">Click to read full summary →</span>
     </article>
   )
 }

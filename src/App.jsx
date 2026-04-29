@@ -98,7 +98,10 @@ Make all summaries rich, data-driven, and relevant to Indian and global HR conte
     {
       method: 'POST', signal,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.9, maxOutputTokens: 16384 }
+      })
     }
   )
 
@@ -108,13 +111,18 @@ Make all summaries rich, data-driven, and relevant to Indian and global HR conte
   }
   const data = await res.json()
   const raw  = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
-  const clean = raw.replace(/```json[\s\S]*?```|```[\s\S]*?```/g, s =>
-    s.replace(/```json|```/g, '')
-  ).trim()
+  const clean = raw.replace(/```json|```/g, '').trim()
   const jsonStart = clean.indexOf('[')
   const jsonEnd   = clean.lastIndexOf(']')
-  if (jsonStart === -1 || jsonEnd === -1) throw new Error('Invalid JSON response')
-  return JSON.parse(clean.slice(jsonStart, jsonEnd + 1))
+  if (jsonStart === -1 || jsonEnd === -1) throw new Error('Invalid JSON response from Gemini')
+  const articles = JSON.parse(clean.slice(jsonStart, jsonEnd + 1))
+
+  // Ensure each article has a real URL fallback
+  return articles.map((a, i) => ({
+    ...a,
+    id: a.id || `art_${dateStr}_${String(i+1).padStart(3,'0')}`,
+    url: (a.url && a.url !== '#' && a.url.startsWith('http')) ? a.url : (SOURCE_URLS[a.source] || '#'),
+  }))
 }
 
 // ── LocalStorage helpers ──────────────────────────────
