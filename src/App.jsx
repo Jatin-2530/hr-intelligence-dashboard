@@ -185,23 +185,83 @@ Companies to use (each used only ONCE across all 48 articles): Infosys, TCS, Wip
 
   const data = await res.json()
   const raw   = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+  if (!raw) throw new Error('Gemini returned an empty response — please retry')
+
+  // ── Layer 1: Clean markdown wrappers ──────────────
   const clean = raw.replace(/```json|```/g, '').trim()
+
+  // ── Layer 2: Extract JSON array boundaries ─────────
   const jsonStart = clean.indexOf('[')
   const jsonEnd   = clean.lastIndexOf(']')
-  if (jsonStart === -1 || jsonEnd === -1) throw new Error('Gemini returned invalid JSON — please retry')
+  if (jsonStart === -1) throw new Error('Gemini did not return a JSON array. Raw response: ' + clean.slice(0, 200))
 
-  const parsed = JSON.parse(clean.slice(jsonStart, jsonEnd + 1))
+  let jsonStr = jsonStart !== -1 && jsonEnd !== -1
+    ? clean.slice(jsonStart, jsonEnd + 1)
+    : clean.slice(jsonStart)
 
-  // 1. Assign stable IDs and ensure URLs
-  const withIds = parsed.map((a, i) => ({
-    ...a,
-    id: a.id || `art_${dateStr}_${String(i+1).padStart(3,'0')}`,
-    url: (a.url && a.url !== '#' && a.url.startsWith('http'))
-      ? a.url
-      : (SOURCE_URLS[a.source] || 'https://www.shrm.org/topics-tools/news'),
-  }))
+  // ── Layer 3: Smart JSON repair for truncated responses ──
+  let parsed = null
+  try {
+    parsed = JSON.parse(jsonStr)
+  } catch (firstErr) {
+    // Try to salvage partial JSON — find last complete object
+    console.warn('Full JSON parse failed, attempting repair…', firstErr.message)
+    try {
+      // Find last complete }, before truncation
+      const lastComplete = jsonStr.lastIndexOf('},')
+      if (lastComplete > 100) {
+        const repaired = jsonStr.slice(0, lastComplete + 1) + ']'
+        parsed = JSON.parse(repaired)
+        console.info(`Repaired truncated JSON — recovered ${parsed.length} articles`)
+      }
+    } catch {}
 
-  // 2. Post-generation dedup
+    // If repair also failed, try extracting individual objects
+    if (!parsed) {
+      try {
+        const objects = []
+        const objRegex = /\{[^{}]*"title"[^{}]*"summary"[^{}]*\}/gs
+        const matches = jsonStr.match(objRegex) || []
+        for (const m of matches) {
+          try { objects.push(JSON.parse(m)) } catch {}
+        }
+        if (objects.length > 0) {
+          parsed = objects
+          console.info(`Extracted ${objects.length} articles via regex fallback`)
+        }
+      } catch {}
+    }
+
+    if (!parsed || parsed.length === 0) {
+      throw new Error(
+        `Gemini response was too long and got cut off (${raw.length} chars). ` +
+        `This happens with 48-article requests. Click Retry — it usually works on the second attempt. ` +
+        `Parse error: ${firstErr.message}`
+      )
+    }
+  }
+
+  if (!Array.isArray(parsed)) throw new Error('Gemini returned non-array JSON — please retry')
+  if (parsed.length === 0)   throw new Error('Gemini returned empty array — please retry')
+
+  // ── Layer 4: Normalise each article ───────────────
+  const withIds = parsed
+    .filter(a => a && typeof a === 'object' && a.title && a.summary)
+    .map((a, i) => ({
+      ...a,
+      id:  a.id  || `art_${dateStr}_${String(i+1).padStart(3,'0')}`,
+      url: (a.url && a.url !== '#' && a.url.startsWith('http'))
+        ? a.url
+        : (SOURCE_URLS[a.source] || 'https://www.shrm.org/topics-tools/news'),
+      summary: a.summary || '',
+      source:  a.source  || 'People Matters',
+      date:    a.date    || dateStr,
+      category: a.category || 'TA',
+    }))
+
+  if (withIds.length === 0) throw new Error('All articles were malformed — please retry')
+
+  // ── Layer 5: Post-generation dedup ────────────────
   return deduplicateArticles(withIds)
 }
 
@@ -293,18 +353,39 @@ export default function App() {
     abortRef.current = new AbortController()
     setLoadingDate(date)
     setErrorByDate(prev => ({ ...prev, [date]: null }))
-    try {
-      const data = await fetchNewsFromGemini(apiKey, date, abortRef.current.signal)
-      setArticlesByDate(prev => ({ ...prev, [date]: data }))
-      saveNewsForDate(date, data)
-      setLastRefresh(new Date())
-      toast(`${data.length} articles loaded for ${date}`, 'success')
-    } catch(e) {
-      if (e.name !== 'AbortError') {
-        setErrorByDate(prev => ({ ...prev, [date]: e.message }))
-        toast('Failed: ' + e.message, 'error')
+
+    // Auto-retry up to 2 times on failure
+    const MAX_RETRIES = 2
+    let lastError = null
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        if (attempt > 1) {
+          // Brief pause before retry
+          await new Promise(r => setTimeout(r, 1500))
+          toast(`Retry ${attempt}/${MAX_RETRIES} — Gemini response was incomplete…`, 'info')
+        }
+        const data = await fetchNewsFromGemini(apiKey, date, abortRef.current.signal)
+        setArticlesByDate(prev => ({ ...prev, [date]: data }))
+        saveNewsForDate(date, data)
+        setLastRefresh(new Date())
+        toast(`${data.length} articles loaded`, 'success')
+        lastError = null
+        break // success — stop retrying
+      } catch(e) {
+        if (e.name === 'AbortError') { setLoadingDate(null); return }
+        lastError = e
+        console.error(`Attempt ${attempt} failed:`, e.message)
+        if (attempt === MAX_RETRIES) {
+          // All retries exhausted — show clear error
+          const errorMsg = e.message.length > 300 ? e.message.slice(0, 300) + '…' : e.message
+          setErrorByDate(prev => ({ ...prev, [date]: errorMsg }))
+          toast('Failed after ' + MAX_RETRIES + ' attempts — see error screen', 'error')
+        }
       }
-    } finally { setLoadingDate(null) }
+    }
+
+    setLoadingDate(null)
   }, [apiKey, articlesByDate, toast])
 
   useEffect(() => { if (apiKey && viewDate) fetchNews(viewDate, false) }, [apiKey, viewDate]) // eslint-disable-line
