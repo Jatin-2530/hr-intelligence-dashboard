@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { AlertCircle, RefreshCw, BookOpen, Loader } from 'lucide-react'
+import LoadingBar from './LoadingBar.jsx'
 import NewsCard from './NewsCard.jsx'
 import ArticleModal from './ArticleModal.jsx'
 import { CATEGORIES } from '../App.jsx'
@@ -67,14 +68,7 @@ export default function NewsFeed({
       </div>
 
       {/* ── Loading state — inline, not full-screen ── */}
-      {loading && (
-        <div style={{ padding:'60px 28px', textAlign:'center', display:'flex', flexDirection:'column', alignItems:'center', gap:16 }}>
-          <div className="loading-spinner" />
-          <div className="loading-bar-wrap"><div className="loading-bar" /></div>
-          <div className="state-title">Building {fmtDay(viewDate)}'s Brief</div>
-          <div className="state-subtitle">Curating 48 articles across 12 HR domains…</div>
-        </div>
-      )}
+      {loading && <LoadingBar dateLabel={fmtDay(viewDate)} />}
 
       {/* ── Error state ── */}
       {!loading && error && (
