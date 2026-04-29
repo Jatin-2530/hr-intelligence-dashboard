@@ -106,7 +106,7 @@ export default function ArticleModal({ article, isSaved, onToggleSave, onClose }
             <div style={{ display:'flex', gap:8 }}>
               <button
                 className="btn btn-secondary"
-                onClick={() => onToggleSave(id)}
+                onClick={() => isSaved ? onToggleSave(id) : onToggleSave(article)}
                 style={isSaved ? { borderColor:'var(--accent)', color:'var(--accent)' } : {}}
               >
                 {isSaved ? <><BookmarkCheck size={13}/> Saved</> : <><Bookmark size={13}/> Save Article</>}

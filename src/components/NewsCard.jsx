@@ -34,7 +34,7 @@ export default function NewsCard({ article, isSaved, onToggleSave, onOpen, searc
               <ExternalLink size={11} />
             </a>
           )}
-          <button className={`icon-btn ${isSaved?'active':''}`} onClick={() => onToggleSave(id)} title={isSaved?'Unsave':'Save'}>
+          <button className={`icon-btn ${isSaved?'active':''}`} onClick={() => isSaved ? onToggleSave(id) : onToggleSave(article)} title={isSaved?'Unsave':'Save'}>
             {isSaved ? <BookmarkCheck size={11}/> : <Bookmark size={11}/>}
           </button>
         </div>

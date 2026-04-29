@@ -3,11 +3,12 @@ import Header from './components/Header.jsx'
 import Sidebar from './components/Sidebar.jsx'
 import NewsFeed from './components/NewsFeed.jsx'
 import NotesPanel from './components/NotesPanel.jsx'
+import SavedPanel from './components/SavedPanel.jsx'
 import Toast from './components/Toast.jsx'
 
 // ── Storage Keys ──────────────────────────────────────
 const NOTES_KEY  = 'hrid_notes'
-const SAVED_KEY  = 'hrid_saved'
+const SAVED_KEY  = 'hrid_saved'       // array of { id, articleData, savedAt }
 const THEME_KEY  = 'hrid_theme'
 const APIKEY_KEY = 'hrid_gemini_key'
 const TIME_KEY   = 'hrid_time'
@@ -15,22 +16,22 @@ const TIME_KEY   = 'hrid_time'
 function todayStr() { return new Date().toISOString().split('T')[0] }
 function newsKey(d) { return `hrid_news_${d}` }
 
-// ── Source URL map (module-level, always available) ───
+// ── Source URL map ─────────────────────────────────────
 const SOURCE_URLS = {
-  'SHRM':                     'https://www.shrm.org/topics-tools/news',
-  'Harvard Business Review':  'https://hbr.org/topic/subject/human-resource-management',
-  'People Matters':           'https://www.peoplematters.in/news',
-  'HR Dive':                  'https://www.hrdive.com/news',
-  'McKinsey & Company':       'https://www.mckinsey.com/capabilities/people-and-organizational-performance/our-insights',
-  'Deloitte Insights':        'https://www2.deloitte.com/us/en/insights/topics/talent/human-capital-trends.html',
-  'LinkedIn Talent Solutions':'https://business.linkedin.com/talent-solutions/resources',
-  'Gartner HR':               'https://www.gartner.com/en/human-resources',
+  'SHRM':                      'https://www.shrm.org/topics-tools/news',
+  'Harvard Business Review':   'https://hbr.org/topic/subject/human-resource-management',
+  'People Matters':            'https://www.peoplematters.in/news',
+  'HR Dive':                   'https://www.hrdive.com/news',
+  'McKinsey & Company':        'https://www.mckinsey.com/capabilities/people-and-organizational-performance/our-insights',
+  'Deloitte Insights':         'https://www2.deloitte.com/us/en/insights/topics/talent/human-capital-trends.html',
+  'LinkedIn Talent Solutions': 'https://business.linkedin.com/talent-solutions/resources',
+  'Gartner HR':                'https://www.gartner.com/en/human-resources',
   'MIT Sloan Management Review':'https://sloanreview.mit.edu/topic/talent-management',
-  'Economic Times HR':        'https://economictimes.indiatimes.com/jobs',
-  'Business Today':           'https://www.businesstoday.in/jobs',
-  'Workforce Magazine':       'https://www.workforce.com/news',
-  'NASSCOM':                  'https://nasscom.in/knowledge-center/publications',
-  'Josh Bersin Academy':      'https://joshbersin.com/blog',
+  'Economic Times HR':         'https://economictimes.indiatimes.com/jobs',
+  'Business Today':            'https://www.businesstoday.in/jobs',
+  'Workforce Magazine':        'https://www.workforce.com/news',
+  'NASSCOM':                   'https://nasscom.in/knowledge-center/publications',
+  'Josh Bersin Academy':       'https://joshbersin.com/blog',
 }
 
 // ── Categories ────────────────────────────────────────
@@ -67,66 +68,112 @@ export const CAT_SHORT = {
   LEAD:'LEAD', GLOB:'GLOB', CAREER:'CAREER',
 }
 
+// ── Anti-duplication helpers ──────────────────────────
+
+// Get titles from last N days to inject into prompt
+function getRecentTitles(daysBack = 5) {
+  const titles = []
+  for (let i = 1; i <= daysBack; i++) {
+    const d = new Date(); d.setDate(d.getDate() - i)
+    const dateStr = d.toISOString().split('T')[0]
+    try {
+      const cached = JSON.parse(localStorage.getItem(newsKey(dateStr)) || 'null')
+      if (cached) cached.forEach(a => titles.push(a.title))
+    } catch {}
+  }
+  return titles
+}
+
+// Post-generation dedup: remove articles that share 3+ meaningful words with any prior article
+function deduplicateArticles(articles) {
+  const seen = []
+  return articles.filter(article => {
+    const words = new Set(
+      article.title.toLowerCase()
+        .split(/\s+/)
+        .filter(w => w.length > 4 && !STOP_WORDS.has(w))
+    )
+    const isDup = seen.some(prev => {
+      const prevWords = new Set(
+        prev.toLowerCase().split(/\s+/).filter(w => w.length > 4 && !STOP_WORDS.has(w))
+      )
+      const overlap = [...words].filter(w => prevWords.has(w))
+      return overlap.length >= 3
+    })
+    if (!isDup) { seen.push(article.title); return true }
+    return false
+  })
+}
+
+const STOP_WORDS = new Set([
+  'about','their','which','would','could','should','through','across',
+  'between','within','while','where','those','these','there','have',
+  'with','from','that','this','will','been','being','india','indian',
+  'company','firms','firms','using','based','after','human','resource',
+  'resources','management','global','report','study','survey','shows',
+  'reveals','finds','found','according','percent','annual','latest',
+])
+
 // ── Gemini API Call ───────────────────────────────────
 async function fetchNewsFromGemini(apiKey, dateStr, signal) {
   const displayDate = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', {
     weekday:'long', year:'numeric', month:'long', day:'numeric'
   })
 
-  const prompt = `You are a senior HR intelligence journalist. Generate 48 completely unique HR news articles for ${displayDate}.
+  // Pull last 5 days of titles to block duplication
+  const recentTitles = getRecentTitles(5)
+  const recentBlock = recentTitles.length > 0
+    ? `\n\nCRITICAL — FORBIDDEN TOPICS (these were covered in the last 5 days — DO NOT repeat these subjects, angles, companies, or data points):\n${recentTitles.map((t,i) => `${i+1}. ${t}`).join('\n')}\n`
+    : ''
 
-OUTPUT RULES — STRICTLY FOLLOW:
-- Return RAW JSON array only. Zero markdown. Zero backticks. Zero explanation.
-- Exactly 4 articles per category: TA, HRBP, MIS, LD, RR, DEI, COMP, WELL, TECH, LEAD, GLOB, CAREER (48 total)
-- Each summary MUST be 150-200 words minimum. Count them. Do not submit short summaries.
-- Every article must name a real company AND cite a real research report with year
-- Every article URL must be a plausible real link (not just the homepage)
+  const prompt = `You are a senior HR intelligence journalist writing for a premium HR publication. Generate 48 COMPLETELY UNIQUE HR news articles for ${displayDate}.
+${recentBlock}
+STRICT OUTPUT RULES:
+1. Return a RAW JSON array only — zero markdown, zero backticks, zero preamble
+2. Exactly 4 articles per category (12 categories × 4 = 48 total)
+3. Categories: TA, HRBP, MIS, LD, RR, DEI, COMP, WELL, TECH, LEAD, GLOB, CAREER
+4. Every summary MUST be 200 words minimum — write full journalistic paragraphs
+5. Every article must feature a DIFFERENT company — no company repeated twice across all 48
+6. Every article must cite a specific named research report with year
+7. URLs must be realistic full paths, not just homepages
 
-JSON format for each object:
+JSON structure (one object per article):
 {
   "id": "art_${dateStr}_001",
-  "title": "Specific data-driven headline, max 14 words",
-  "summary": "WRITE 150-200 WORDS HERE. Open with the core finding and a specific statistic. Name the company or organisation involved (use Indian and global companies: Infosys, TCS, Wipro, HCL, Accenture India, Microsoft India, Google India, Tata Group, Reliance, HDFC Bank, Unilever India, Zomato, Mahindra, Deloitte India, KPMG India). Cite the research source by full name and year (e.g. LinkedIn Global Talent Trends 2025, Mercer Total Remuneration Survey 2024, Gartner HR Leaders Survey Q1 2025, Gallup State of the Global Workplace 2024, Deloitte Global Human Capital Trends 2024). Explain the business context and why this matters for HR professionals. Add a second supporting data point from a different source. Describe the challenge or opportunity this creates for CHROs and HR teams. End with one concrete, specific, actionable recommendation for an HR practitioner or student preparing for an HR interview.",
-  "source": "SHRM or Harvard Business Review or People Matters or HR Dive or McKinsey & Company or Deloitte Insights or LinkedIn Talent Solutions or Gartner HR or MIT Sloan Management Review or Economic Times HR or Business Today or Workforce Magazine or NASSCOM or Josh Bersin Academy",
-  "url": "https://[domain-of-source]/[realistic-path-matching-article-topic-and-title]",
+  "title": "Specific headline with a number or company name, max 14 words",
+  "summary": "PARAGRAPH 1 (60-70 words): Lead with the core finding and exact statistic. Name the company or organisation. Cite the full report name and year. Example: 'Infosys has restructured its campus recruitment model for FY2026, replacing GPA-based screening with AI-driven competency assessments across 48 partner universities. According to the LinkedIn Global Talent Trends 2025 report, 73 percent of hiring managers in technology sector now rank demonstrated skills above academic credentials, a sharp reversal from pre-pandemic norms.'\n\nPARAGAPH 2 (70-80 words): Provide business context — why is this happening now? What market pressure, regulation, or workforce shift is driving this change? Name a second data point from a different source. Describe the specific challenge or opportunity for CHRO/HR teams.\n\nPARAGRAPH 3 (40-50 words): End with one concrete, specific, actionable recommendation that an HR professional or MBA student preparing for HR interviews can apply or mention in interviews. Make it practical and specific, not generic.",
+  "source": "One of: SHRM | Harvard Business Review | People Matters | HR Dive | McKinsey & Company | Deloitte Insights | LinkedIn Talent Solutions | Gartner HR | MIT Sloan Management Review | Economic Times HR | Business Today | Workforce Magazine | NASSCOM | Josh Bersin Academy",
+  "url": "Full realistic URL path — e.g. https://www.shrm.org/topics-tools/news/talent-acquisition/skill-based-hiring-technology-2025 or https://hbr.org/2025/04/rethinking-employee-recognition-india or https://www.peoplematters.in/article/talent-management/infosys-campus-ai-hiring-2025",
   "date": "${dateStr}",
   "category": "TA",
   "readTime": 5,
-  "keyInsight": "Single most important stat or takeaway, under 15 words"
+  "keyInsight": "One stat or takeaway that would impress in an HR interview — under 15 words"
 }
 
-URL examples by source:
-- SHRM: https://www.shrm.org/topics-tools/news/talent-acquisition/skill-based-hiring-india-2025
-- Harvard Business Review: https://hbr.org/2025/04/rethinking-performance-management-hybrid-teams
-- People Matters: https://www.peoplematters.in/article/talent-management/ai-campus-hiring-infosys-2025
-- HR Dive: https://www.hrdive.com/news/pay-transparency-laws-india-2025/
-- McKinsey: https://www.mckinsey.com/capabilities/people-and-organizational-performance/our-insights/future-of-work-india
-- Economic Times HR: https://economictimes.indiatimes.com/jobs/hr-policies-trends/posh-act-enforcement-2025
-- Gartner HR: https://www.gartner.com/en/human-resources/insights/talent-acquisition-trends-2025
+4 distinct topics per category — each from a completely different angle:
+TA: [skill-based hiring methodology] [AI candidate screening ROI] [employer branding on social media] [structured vs unstructured interviews]
+HRBP: [HRBP to strategic partner transition] [org design in post-merger integration] [HR OKRs and business KPIs] [workforce planning with finance]
+MIS: [predictive attrition modelling] [real-time HR dashboard design] [workforce cost per hire analytics] [people data privacy governance]
+LD: [GenAI upskilling at enterprise scale] [70-20-10 learning model ROI] [LXP vs LMS platform decision] [first-time manager capability programs]
+RR: [pay transparency law compliance] [total rewards redesign 2025] [ESOP for Series B startups] [peer recognition program effectiveness]
+DEI: [gender pay audit step-by-step] [disability-inclusive hiring process] [allyship training effectiveness data] [DEI scorecard & accountability metrics]
+COMP: [India Labour Code 4-in-1 update] [POSH Act internal committee compliance] [gig worker misclassification risk] [EPF automation with HRMS]
+WELL: [burnout early warning indicators] [EAP utilisation benchmarks] [4-day workweek productivity data] [financial wellness program ROI]
+TECH: [AI HRMS copilot adoption] [migrating from legacy SAP HR] [HR chatbot deflection rates] [bias in algorithmic hiring tools]
+LEAD: [toxic manager early detection] [CEO succession planning failure causes] [managing psychological safety in hybrid] [culture due diligence in M&A]
+GLOB: [digital nomad visa HR implications] [India GCC talent competition 2025] [multi-country payroll compliance] [global DEI benchmark gaps]
+CAREER: [SHRM-CP vs PHRi — which to pursue] [HR case interview 3-step framework] [HR business partner salary benchmarks India 2025] [building an HR portfolio for placements]
 
-4 unique topics per category:
-TA: skill-based hiring vs degree, AI screening tools ROI, employer brand on LinkedIn, structured interviewing
-HRBP: HRBP transitioning to strategic role, org design post-merger, HR OKRs, people strategy alignment
-MIS: predictive attrition models, HR dashboard design, workforce cost analytics, people data governance
-LD: GenAI skills training at scale, 70-20-10 learning model revival, LXP adoption, manager capability building
-RR: pay transparency legislation, total rewards post-inflation, ESOP for startups, spot recognition ROI
-DEI: gender pay audit methodology, disability inclusion in hiring, allyship programs, DEI metrics framework
-COMP: India new labour codes 2025 update, POSH Act internal committee, gig worker rights, PF automation
-WELL: burnout measurement tools, EAP utilisation data, 4-day workweek pilot results, financial wellness ROI
-TECH: AI copilots in HR, legacy HRMS migration, HR chatbot adoption, ethical AI in hiring
-LEAD: toxic manager identification, CEO succession rate, hybrid team leadership, psychological safety ROI
-GLOB: remote work visa policies, India GCC talent war, cross-border payroll compliance, DEI global benchmarks
-CAREER: SHRM-CP vs PHRi comparison, HR case interview structure, HR analyst salary 2025, building HR portfolio`
+Companies to use (each used only ONCE across all 48 articles): Infosys, TCS, Wipro, HCL Technologies, Accenture India, Microsoft India, Google India, Amazon India, Tata Consultancy, Reliance Industries, HDFC Bank, ICICI Bank, Zomato, Swiggy, Flipkart, PhonePe, Paytm, Byju's, Ola Electric, Mahindra Group, L&T, Bajaj Auto, Asian Paints, Nestle India, HUL, ITC, Deloitte India, KPMG India, PwC India, EY India, Aon India, Mercer India, Spencer Stuart India, Korn Ferry India`
 
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`,
     {
-      method: 'POST',
-      signal,
+      method: 'POST', signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.85, maxOutputTokens: 32768 }
+        generationConfig: { temperature: 0.9, maxOutputTokens: 32768 }
       })
     }
   )
@@ -137,22 +184,25 @@ CAREER: SHRM-CP vs PHRi comparison, HR case interview structure, HR analyst sala
   }
 
   const data = await res.json()
-  const raw  = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+  const raw   = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
   const clean = raw.replace(/```json|```/g, '').trim()
   const jsonStart = clean.indexOf('[')
   const jsonEnd   = clean.lastIndexOf(']')
-  if (jsonStart === -1 || jsonEnd === -1) throw new Error('Gemini returned invalid JSON')
+  if (jsonStart === -1 || jsonEnd === -1) throw new Error('Gemini returned invalid JSON — please retry')
 
-  const articles = JSON.parse(clean.slice(jsonStart, jsonEnd + 1))
+  const parsed = JSON.parse(clean.slice(jsonStart, jsonEnd + 1))
 
-  // Guarantee every article has a usable URL — use source homepage if Gemini skips it
-  return articles.map((a, i) => ({
+  // 1. Assign stable IDs and ensure URLs
+  const withIds = parsed.map((a, i) => ({
     ...a,
-    id: a.id || `art_${dateStr}_${String(i + 1).padStart(3, '0')}`,
+    id: a.id || `art_${dateStr}_${String(i+1).padStart(3,'0')}`,
     url: (a.url && a.url !== '#' && a.url.startsWith('http'))
       ? a.url
       : (SOURCE_URLS[a.source] || 'https://www.shrm.org/topics-tools/news'),
   }))
+
+  // 2. Post-generation dedup
+  return deduplicateArticles(withIds)
 }
 
 // ── LocalStorage helpers ──────────────────────────────
@@ -161,15 +211,19 @@ function loadNewsForDate(d) {
 }
 function saveNewsForDate(d, articles) {
   try { localStorage.setItem(newsKey(d), JSON.stringify(articles)) } catch {}
+  // Prune older than 8 days
   for (let i = 8; i < 15; i++) {
     const old = new Date(); old.setDate(old.getDate() - i)
     localStorage.removeItem(newsKey(old.toISOString().split('T')[0]))
   }
 }
-function loadNotes()     { try { return JSON.parse(localStorage.getItem(NOTES_KEY) || '[]') } catch { return [] } }
-function saveNotes(n)    { try { localStorage.setItem(NOTES_KEY, JSON.stringify(n)) } catch {} }
-function loadSaved()     { try { return JSON.parse(localStorage.getItem(SAVED_KEY) || '[]') } catch { return [] } }
-function saveSavedIds(s) { try { localStorage.setItem(SAVED_KEY, JSON.stringify(s)) } catch {} }
+
+function loadNotes()  { try { return JSON.parse(localStorage.getItem(NOTES_KEY) || '[]') } catch { return [] } }
+function saveNotes(n) { try { localStorage.setItem(NOTES_KEY, JSON.stringify(n)) } catch {} }
+
+// Saved articles: store full article objects so they're available even without the day's cache
+function loadSavedArticles()  { try { return JSON.parse(localStorage.getItem(SAVED_KEY) || '[]') } catch { return [] } }
+function saveSavedArticles(a) { try { localStorage.setItem(SAVED_KEY, JSON.stringify(a)) } catch {} }
 
 function loadTodayTime() {
   try {
@@ -190,104 +244,81 @@ function getPastDays(n = 7) {
 
 // ── App ───────────────────────────────────────────────
 export default function App() {
-  const [theme,       setTheme]       = useState(() => localStorage.getItem(THEME_KEY) || 'light')
-  const [apiKey,      setApiKey]      = useState(() => localStorage.getItem(APIKEY_KEY) || '')
-  const [keyInput,    setKeyInput]    = useState('')
-  const [activeTab,   setActiveTab]   = useState('all')
-  const [viewDate,    setViewDate]    = useState(todayStr())
-  const [searchQuery, setSearchQuery] = useState('')
-
-  // Per-date article cache in state — key: dateStr, value: articles[]
-  const [articlesByDate, setArticlesByDate] = useState({})
-  const [loadingDate,    setLoadingDate]    = useState(null)  // which date is loading
-  const [errorByDate,    setErrorByDate]    = useState({})
-
-  const [savedIds,    setSavedIds]    = useState(loadSaved)
-  const [notes,       setNotes]       = useState(loadNotes)
-  const [lastRefresh, setLastRefresh] = useState(null)
-  const [toasts,      setToasts]      = useState([])
-  const [sessionSec,  setSessionSec]  = useState(loadTodayTime)
+  const [theme,         setTheme]         = useState(() => localStorage.getItem(THEME_KEY) || 'light')
+  const [apiKey,        setApiKey]        = useState(() => localStorage.getItem(APIKEY_KEY) || '')
+  const [keyInput,      setKeyInput]      = useState('')
+  const [activeTab,     setActiveTab]     = useState('all')
+  const [viewDate,      setViewDate]      = useState(todayStr())
+  const [searchQuery,   setSearchQuery]   = useState('')
+  const [articlesByDate,setArticlesByDate]= useState({})
+  const [loadingDate,   setLoadingDate]   = useState(null)
+  const [errorByDate,   setErrorByDate]   = useState({})
+  // Saved: full article objects, persisted forever
+  const [savedArticles, setSavedArticles] = useState(loadSavedArticles)
+  const [notes,         setNotes]         = useState(loadNotes)
+  const [lastRefresh,   setLastRefresh]   = useState(null)
+  const [toasts,        setToasts]        = useState([])
+  const [sessionSec,    setSessionSec]    = useState(loadTodayTime)
   const abortRef = useRef(null)
 
-  // Theme
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
     localStorage.setItem(THEME_KEY, theme)
   }, [theme])
 
-  // Persist
-  useEffect(() => { saveSavedIds(savedIds) }, [savedIds])
+  useEffect(() => { saveSavedArticles(savedArticles) }, [savedArticles])
   useEffect(() => { saveNotes(notes) }, [notes])
-
-  // Timer
   useEffect(() => {
-    const t = setInterval(() => setSessionSec(s => { const n = s+1; saveTodayTime(n); return n }), 1000)
+    const t = setInterval(() => setSessionSec(s => { const n=s+1; saveTodayTime(n); return n }), 1000)
     return () => clearInterval(t)
   }, [])
 
-  // Toast
-  const toast = useCallback((msg, type = 'info') => {
+  const toast = useCallback((msg, type='info') => {
     const id = Date.now()
     setToasts(p => [...p, { id, msg, type }])
     setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 3200)
   }, [])
 
-  // Fetch news for a specific date
-  const fetchNews = useCallback(async (date, force = false) => {
+  const fetchNews = useCallback(async (date, force=false) => {
     if (!apiKey) return
-
-    // Already loading this date
-    if (loadingDate === date && !force) return
-
-    // Check in-memory cache first
     if (!force && articlesByDate[date]?.length > 0) return
-
-    // Check localStorage
     if (!force) {
       const cached = loadNewsForDate(date)
-      if (cached && cached.length > 0) {
+      if (cached?.length > 0) {
         setArticlesByDate(prev => ({ ...prev, [date]: cached }))
         return
       }
     }
-
-    // Cancel any in-flight request
     if (abortRef.current) abortRef.current.abort()
     abortRef.current = new AbortController()
-
     setLoadingDate(date)
     setErrorByDate(prev => ({ ...prev, [date]: null }))
-
     try {
       const data = await fetchNewsFromGemini(apiKey, date, abortRef.current.signal)
       setArticlesByDate(prev => ({ ...prev, [date]: data }))
       saveNewsForDate(date, data)
       setLastRefresh(new Date())
-      toast(`${data.length} articles loaded`, 'success')
-    } catch (e) {
+      toast(`${data.length} articles loaded for ${date}`, 'success')
+    } catch(e) {
       if (e.name !== 'AbortError') {
         setErrorByDate(prev => ({ ...prev, [date]: e.message }))
-        toast('Failed to load — ' + e.message, 'error')
+        toast('Failed: ' + e.message, 'error')
       }
-    } finally {
-      setLoadingDate(null)
-    }
-  }, [apiKey, articlesByDate, loadingDate, toast])
+    } finally { setLoadingDate(null) }
+  }, [apiKey, articlesByDate, toast])
 
-  // Auto-fetch when date changes or apiKey set
-  useEffect(() => {
-    if (apiKey && viewDate) fetchNews(viewDate, false)
-  }, [apiKey, viewDate]) // eslint-disable-line
+  useEffect(() => { if (apiKey && viewDate) fetchNews(viewDate, false) }, [apiKey, viewDate]) // eslint-disable-line
 
-  // Current articles (for the viewed date)
   const currentArticles = articlesByDate[viewDate] || []
   const isLoading = loadingDate === viewDate
   const currentError = errorByDate[viewDate] || null
 
-  // Filtered articles
+  // Saved article IDs set for quick lookup
+  const savedIds = new Set(savedArticles.map(a => a.id))
+
+  // Filtered articles for news feed
   const filteredArticles = currentArticles.filter(a => {
-    if (activeTab === 'saved' && !savedIds.includes(a.id)) return false
-    if (activeTab !== 'all' && activeTab !== 'saved' && a.category !== activeTab) return false
+    if (activeTab !== 'all' && a.category !== activeTab) return false
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase()
       return a.title.toLowerCase().includes(q) ||
@@ -297,76 +328,65 @@ export default function App() {
     return true
   })
 
-  // Counts always based on current articles — never blocked by loading
   const counts = CATEGORIES.reduce((acc, c) => {
-    acc[c.id] = c.id === 'all'
-      ? currentArticles.length
-      : currentArticles.filter(a => a.category === c.id).length
+    acc[c.id] = c.id==='all' ? currentArticles.length : currentArticles.filter(a=>a.category===c.id).length
     return acc
-  }, { saved: savedIds.length })
+  }, { saved: savedArticles.length })
 
-  const toggleSave = useCallback(id =>
-    setSavedIds(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]), [])
+  // Toggle save — stores FULL article object so saved screen works forever
+  const toggleSave = useCallback((articleOrId) => {
+    if (typeof articleOrId === 'string') {
+      // Called with just ID — remove from saved
+      setSavedArticles(p => p.filter(a => a.id !== articleOrId))
+      return
+    }
+    const article = articleOrId
+    setSavedArticles(prev => {
+      const exists = prev.find(a => a.id === article.id)
+      if (exists) return prev.filter(a => a.id !== article.id)
+      return [{ ...article, savedAt: new Date().toISOString() }, ...prev]
+    })
+  }, [])
 
   const createNote = useCallback(n => {
     const note = { ...n, id:'note_'+Date.now(), createdAt:new Date().toISOString(), updatedAt:new Date().toISOString() }
-    setNotes(p => [note, ...p])
-    toast('Note saved', 'success')
-    return note
+    setNotes(p => [note,...p]); toast('Note saved','success'); return note
   }, [toast])
-
-  const updateNote = useCallback((id, u) => {
-    setNotes(p => p.map(n => n.id===id ? {...n,...u, updatedAt:new Date().toISOString()} : n))
-    toast('Note updated', 'success')
+  const updateNote = useCallback((id,u) => {
+    setNotes(p=>p.map(n=>n.id===id?{...n,...u,updatedAt:new Date().toISOString()}:n)); toast('Note updated','success')
   }, [toast])
+  const deleteNote = useCallback(id => { setNotes(p=>p.filter(n=>n.id!==id)); toast('Note deleted','error') }, [toast])
 
-  const deleteNote = useCallback(id => {
-    setNotes(p => p.filter(n => n.id !== id))
-    toast('Note deleted', 'error')
-  }, [toast])
+  function saveKey() { const k=keyInput.trim(); if(!k)return; localStorage.setItem(APIKEY_KEY,k); setApiKey(k) }
+  function clearKey() { localStorage.removeItem(APIKEY_KEY); setApiKey(''); setArticlesByDate({}); setKeyInput('') }
 
-  function saveKey() {
-    const k = keyInput.trim()
-    if (!k) return
-    localStorage.setItem(APIKEY_KEY, k)
-    setApiKey(k)
-  }
-
-  function clearKey() {
-    localStorage.removeItem(APIKEY_KEY)
-    setApiKey(''); setArticlesByDate({}); setKeyInput('')
-  }
-
-  // ── API Key setup screen ──────────────────────────
-  if (!apiKey) {
-    return (
-      <div className="setup-screen">
-        <div className="setup-box">
-          <div className="setup-logo">HR <span>Intel</span></div>
-          <p style={{ fontSize:13, color:'var(--text-secondary)', lineHeight:1.7, fontFamily:'var(--font-body)' }}>
-            48 curated HR articles daily across 12 domains, personal notes, 7-day archive, and time tracking.
-            Enter your <strong>Gemini API key</strong> to begin.
-          </p>
-          <div className="form-group">
-            <label className="form-label">Gemini API Key</label>
-            <input className="form-input" type="password" placeholder="AIzaSy..."
-              value={keyInput} onChange={e => setKeyInput(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && saveKey()} autoFocus />
-          </div>
-          <button className="btn btn-primary" onClick={saveKey} disabled={!keyInput.trim()}
-            style={{ width:'100%', justifyContent:'center', padding:'12px' }}>
-            Launch Dashboard
-          </button>
-          <p style={{ fontSize:11, color:'var(--text-caption)', textAlign:'center', fontFamily:'var(--font-ui)' }}>
-            Free key at{' '}
-            <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer"
-              style={{ color:'var(--accent)' }}>aistudio.google.com</a>
-            {' '}· Stored in your browser only
-          </p>
+  if (!apiKey) return (
+    <div className="setup-screen">
+      <div className="setup-box">
+        <div className="setup-logo">HR <span>Intel</span></div>
+        <p style={{fontSize:13,color:'var(--text-secondary)',lineHeight:1.7,fontFamily:'var(--font-body)'}}>
+          48 curated HR articles daily across 12 domains, personal notes, 7-day archive, time tracking and a permanent saved library.
+          Enter your <strong>Gemini API key</strong> to begin.
+        </p>
+        <div className="form-group">
+          <label className="form-label">Gemini API Key</label>
+          <input className="form-input" type="password" placeholder="AIzaSy..."
+            value={keyInput} onChange={e=>setKeyInput(e.target.value)}
+            onKeyDown={e=>e.key==='Enter'&&saveKey()} autoFocus />
         </div>
+        <button className="btn btn-primary" onClick={saveKey} disabled={!keyInput.trim()}
+          style={{width:'100%',justifyContent:'center',padding:'12px'}}>
+          Launch Dashboard
+        </button>
+        <p style={{fontSize:11,color:'var(--text-caption)',textAlign:'center',fontFamily:'var(--font-ui)'}}>
+          Free key at{' '}
+          <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer"
+            style={{color:'var(--accent)'}}>aistudio.google.com</a>
+          {' '}· Stored in your browser only
+        </p>
       </div>
-    )
-  }
+    </div>
+  )
 
   return (
     <div className="app-wrapper">
@@ -378,15 +398,12 @@ export default function App() {
         onClearKey={clearKey} sessionSec={sessionSec}
       />
       <div className="app-body">
-        {/* Sidebar is ALWAYS rendered — never blocked by loading state */}
         <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} counts={counts} />
         <main className="main-content">
           {activeTab === 'notes' ? (
-            <NotesPanel
-              notes={notes} onCreate={createNote}
-              onUpdate={updateNote} onDelete={deleteNote}
-              searchQuery={searchQuery}
-            />
+            <NotesPanel notes={notes} onCreate={createNote} onUpdate={updateNote} onDelete={deleteNote} searchQuery={searchQuery} />
+          ) : activeTab === 'saved' ? (
+            <SavedPanel savedArticles={savedArticles} onToggleSave={toggleSave} searchQuery={searchQuery} />
           ) : (
             <NewsFeed
               articles={filteredArticles}
@@ -400,6 +417,7 @@ export default function App() {
               viewDate={viewDate}
               setViewDate={d => { setViewDate(d); setActiveTab('all') }}
               pastDays={getPastDays(7)}
+              currentArticles={currentArticles}
             />
           )}
         </main>
