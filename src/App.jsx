@@ -6,101 +6,127 @@ import NotesPanel from './components/NotesPanel.jsx'
 import Toast from './components/Toast.jsx'
 
 // ── Storage Keys ──────────────────────────────────────
-const NOTES_KEY   = 'hrid_notes'
-const SAVED_KEY   = 'hrid_saved'
-const THEME_KEY   = 'hrid_theme'
-const APIKEY_KEY  = 'hrid_gemini_key'
-const TIME_KEY    = 'hrid_time'   // { date: 'YYYY-MM-DD', seconds: 0 }
+const NOTES_KEY  = 'hrid_notes'
+const SAVED_KEY  = 'hrid_saved'
+const THEME_KEY  = 'hrid_theme'
+const APIKEY_KEY = 'hrid_gemini_key'
+const TIME_KEY   = 'hrid_time'
 
 function todayStr() { return new Date().toISOString().split('T')[0] }
-function newsKey(d)  { return `hrid_news_${d}` }
+function newsKey(d) { return `hrid_news_${d}` }
 
-// ── Categories (12) ───────────────────────────────────
+// ── Source URL map (module-level, always available) ───
+const SOURCE_URLS = {
+  'SHRM':                     'https://www.shrm.org/topics-tools/news',
+  'Harvard Business Review':  'https://hbr.org/topic/subject/human-resource-management',
+  'People Matters':           'https://www.peoplematters.in/news',
+  'HR Dive':                  'https://www.hrdive.com/news',
+  'McKinsey & Company':       'https://www.mckinsey.com/capabilities/people-and-organizational-performance/our-insights',
+  'Deloitte Insights':        'https://www2.deloitte.com/us/en/insights/topics/talent/human-capital-trends.html',
+  'LinkedIn Talent Solutions':'https://business.linkedin.com/talent-solutions/resources',
+  'Gartner HR':               'https://www.gartner.com/en/human-resources',
+  'MIT Sloan Management Review':'https://sloanreview.mit.edu/topic/talent-management',
+  'Economic Times HR':        'https://economictimes.indiatimes.com/jobs',
+  'Business Today':           'https://www.businesstoday.in/jobs',
+  'Workforce Magazine':       'https://www.workforce.com/news',
+  'NASSCOM':                  'https://nasscom.in/knowledge-center/publications',
+  'Josh Bersin Academy':      'https://joshbersin.com/blog',
+}
+
+// ── Categories ────────────────────────────────────────
 export const CATEGORIES = [
-  { id: 'all',    label: 'All Sections',              color: '#9C8570', dot: '#9C8570' },
-  { id: 'TA',     label: 'Talent Acquisition',        color: '#1A5C8C', dot: '#1A5C8C' },
-  { id: 'HRBP',   label: 'HR Business Partnering',    color: '#7C3D8C', dot: '#7C3D8C' },
-  { id: 'MIS',    label: 'HR Analytics & MIS',        color: '#1A7A4A', dot: '#1A7A4A' },
-  { id: 'LD',     label: 'Learning & Development',    color: '#C05A1A', dot: '#C05A1A' },
-  { id: 'RR',     label: 'Rewards & Recognition',     color: '#B8920A', dot: '#B8920A' },
-  { id: 'DEI',    label: 'Diversity, Equity & Inclusion', color: '#C23870', dot: '#C23870' },
-  { id: 'COMP',   label: 'HR Law & Compliance',       color: '#2C5F7A', dot: '#2C5F7A' },
-  { id: 'WELL',   label: 'Employee Wellbeing',        color: '#2A7A5C', dot: '#2A7A5C' },
-  { id: 'TECH',   label: 'HR Technology',             color: '#4A3A8C', dot: '#4A3A8C' },
-  { id: 'LEAD',   label: 'Leadership & Culture',      color: '#8C4A1A', dot: '#8C4A1A' },
-  { id: 'GLOB',   label: 'Global HR Trends',          color: '#1A6A7C', dot: '#1A6A7C' },
-  { id: 'CAREER', label: 'HR Career & Interview Prep',color: '#8C2A1A', dot: '#8C2A1A' },
+  { id: 'all',    label: 'All Sections',                  color: '#9C8570' },
+  { id: 'TA',     label: 'Talent Acquisition',            color: '#1A5C8C' },
+  { id: 'HRBP',   label: 'HR Business Partnering',        color: '#7C3D8C' },
+  { id: 'MIS',    label: 'HR Analytics & MIS',            color: '#1A7A4A' },
+  { id: 'LD',     label: 'Learning & Development',        color: '#C05A1A' },
+  { id: 'RR',     label: 'Rewards & Recognition',         color: '#B8920A' },
+  { id: 'DEI',    label: 'Diversity, Equity & Inclusion', color: '#C23870' },
+  { id: 'COMP',   label: 'HR Law & Compliance',           color: '#2C5F7A' },
+  { id: 'WELL',   label: 'Employee Wellbeing',            color: '#2A7A5C' },
+  { id: 'TECH',   label: 'HR Technology',                 color: '#4A3A8C' },
+  { id: 'LEAD',   label: 'Leadership & Culture',          color: '#8C4A1A' },
+  { id: 'GLOB',   label: 'Global HR Trends',              color: '#1A6A7C' },
+  { id: 'CAREER', label: 'Career & Interview Prep',       color: '#8C2A1A' },
 ]
 
 export const CAT_BG = {
-  TA:'var(--cat-ta-bg)', HRBP:'var(--cat-hrbp-bg)', MIS:'var(--cat-mis-bg)',
-  LD:'var(--cat-ld-bg)', RR:'var(--cat-rr-bg)', DEI:'var(--cat-dei-bg)',
-  COMP:'var(--cat-comp-bg)', WELL:'var(--cat-well-bg)', TECH:'var(--cat-tech-bg)',
-  LEAD:'var(--cat-lead-bg)', GLOB:'var(--cat-glob-bg)', CAREER:'var(--cat-career-bg)',
+  TA:'rgba(26,92,140,0.1)', HRBP:'rgba(124,61,140,0.1)', MIS:'rgba(26,122,74,0.1)',
+  LD:'rgba(192,90,26,0.1)', RR:'rgba(184,146,10,0.1)',   DEI:'rgba(194,56,112,0.1)',
+  COMP:'rgba(44,95,122,0.1)', WELL:'rgba(42,122,92,0.1)', TECH:'rgba(74,58,140,0.1)',
+  LEAD:'rgba(140,74,26,0.1)', GLOB:'rgba(26,106,124,0.1)', CAREER:'rgba(140,42,26,0.1)',
 }
 export const CAT_COLOR = {
-  TA:'var(--cat-ta)', HRBP:'var(--cat-hrbp)', MIS:'var(--cat-mis)',
-  LD:'var(--cat-ld)', RR:'var(--cat-rr)', DEI:'var(--cat-dei)',
-  COMP:'var(--cat-comp)', WELL:'var(--cat-well)', TECH:'var(--cat-tech)',
-  LEAD:'var(--cat-lead)', GLOB:'var(--cat-glob)', CAREER:'var(--cat-career)',
+  TA:'#1A5C8C', HRBP:'#7C3D8C', MIS:'#1A7A4A', LD:'#C05A1A', RR:'#B8920A',
+  DEI:'#C23870', COMP:'#2C5F7A', WELL:'#2A7A5C', TECH:'#4A3A8C',
+  LEAD:'#8C4A1A', GLOB:'#1A6A7C', CAREER:'#8C2A1A',
 }
 export const CAT_SHORT = {
   TA:'TA', HRBP:'HRBP', MIS:'MIS', LD:'L&D', RR:'R&R',
-  DEI:'DEI', COMP:'COMP', WELL:'WELL', TECH:'TECH', LEAD:'LEAD', GLOB:'GLOB', CAREER:'CAREER',
+  DEI:'DEI', COMP:'COMP', WELL:'WELL', TECH:'TECH',
+  LEAD:'LEAD', GLOB:'GLOB', CAREER:'CAREER',
 }
 
-export const TAG_COLORS = {
-  Automotive:'tag-Automotive', Finance:'tag-Finance', Consulting:'tag-Consulting',
-  Tech:'tag-Tech', FMCG:'tag-FMCG', Pharma:'tag-Pharma', Banking:'tag-Banking',
-}
-
-// ── Gemini Fetch ──────────────────────────────────────
+// ── Gemini API Call ───────────────────────────────────
 async function fetchNewsFromGemini(apiKey, dateStr, signal) {
-  const displayDate = new Date(dateStr).toLocaleDateString('en-US', {
+  const displayDate = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', {
     weekday:'long', year:'numeric', month:'long', day:'numeric'
   })
 
-  const prompt = `You are a senior HR intelligence editor at a top business publication. Generate 36 unique, insightful, realistic HR news articles dated ${displayDate} (${dateStr}).
+  const prompt = `You are a senior HR intelligence journalist. Generate 48 completely unique HR news articles for ${displayDate}.
 
-Return ONLY a valid JSON array of exactly 36 objects with NO markdown, NO backticks, NO preamble. Each article:
+OUTPUT RULES — STRICTLY FOLLOW:
+- Return RAW JSON array only. Zero markdown. Zero backticks. Zero explanation.
+- Exactly 4 articles per category: TA, HRBP, MIS, LD, RR, DEI, COMP, WELL, TECH, LEAD, GLOB, CAREER (48 total)
+- Each summary MUST be 150-200 words minimum. Count them. Do not submit short summaries.
+- Every article must name a real company AND cite a real research report with year
+- Every article URL must be a plausible real link (not just the homepage)
+
+JSON format for each object:
 {
-  "id": "art_${dateStr}_001",  
-  "title": "compelling headline max 12 words",
-  "summary": "3-4 sentences with specific data: cite real percentages, name actual companies (Infosys, TCS, Wipro, Microsoft, Google, Unilever, Tata Motors, Reliance, HUL, Deloitte, McKinsey, KPMG, Zomato, Swiggy, PhonePe, Byju's), reference real studies (Gallup, LinkedIn Talent Trends 2024, Mercer Global Talent, Gartner HR Survey). Include one actionable insight.",
-  "source": "one of: SHRM|Harvard Business Review|People Matters|HR Dive|McKinsey & Company|Deloitte Insights|LinkedIn Talent Solutions|Gartner HR|MIT Sloan Management Review|Economic Times HR|Business Today|Workforce Magazine|NASSCOM|Josh Bersin Academy",
-  "url": "#",
+  "id": "art_${dateStr}_001",
+  "title": "Specific data-driven headline, max 14 words",
+  "summary": "WRITE 150-200 WORDS HERE. Open with the core finding and a specific statistic. Name the company or organisation involved (use Indian and global companies: Infosys, TCS, Wipro, HCL, Accenture India, Microsoft India, Google India, Tata Group, Reliance, HDFC Bank, Unilever India, Zomato, Mahindra, Deloitte India, KPMG India). Cite the research source by full name and year (e.g. LinkedIn Global Talent Trends 2025, Mercer Total Remuneration Survey 2024, Gartner HR Leaders Survey Q1 2025, Gallup State of the Global Workplace 2024, Deloitte Global Human Capital Trends 2024). Explain the business context and why this matters for HR professionals. Add a second supporting data point from a different source. Describe the challenge or opportunity this creates for CHROs and HR teams. End with one concrete, specific, actionable recommendation for an HR practitioner or student preparing for an HR interview.",
+  "source": "SHRM or Harvard Business Review or People Matters or HR Dive or McKinsey & Company or Deloitte Insights or LinkedIn Talent Solutions or Gartner HR or MIT Sloan Management Review or Economic Times HR or Business Today or Workforce Magazine or NASSCOM or Josh Bersin Academy",
+  "url": "https://[domain-of-source]/[realistic-path-matching-article-topic-and-title]",
   "date": "${dateStr}",
-  "category": "TA|HRBP|MIS|LD|RR|DEI|COMP|WELL|TECH|LEAD|GLOB|CAREER",
-  "readTime": 3,
-  "keyInsight": "one bold stat or takeaway max 12 words"
+  "category": "TA",
+  "readTime": 5,
+  "keyInsight": "Single most important stat or takeaway, under 15 words"
 }
 
-Distribute exactly: 3 TA, 3 HRBP, 3 MIS, 3 LD, 3 RR, 3 DEI, 3 COMP, 3 WELL, 3 TECH, 3 LEAD, 3 GLOB, 3 CAREER.
+URL examples by source:
+- SHRM: https://www.shrm.org/topics-tools/news/talent-acquisition/skill-based-hiring-india-2025
+- Harvard Business Review: https://hbr.org/2025/04/rethinking-performance-management-hybrid-teams
+- People Matters: https://www.peoplematters.in/article/talent-management/ai-campus-hiring-infosys-2025
+- HR Dive: https://www.hrdive.com/news/pay-transparency-laws-india-2025/
+- McKinsey: https://www.mckinsey.com/capabilities/people-and-organizational-performance/our-insights/future-of-work-india
+- Economic Times HR: https://economictimes.indiatimes.com/jobs/hr-policies-trends/posh-act-enforcement-2025
+- Gartner HR: https://www.gartner.com/en/human-resources/insights/talent-acquisition-trends-2025
 
-Topics to cover across categories:
-- TA: campus hiring, ATS tools, employer branding, diversity hiring, gig economy, lateral hiring
-- HRBP: org restructuring, business alignment, workforce planning, change management
-- MIS: people analytics, HRMS platforms, attrition modelling, workforce dashboards
-- LD: upskilling programs, LMS platforms, microlearning, leadership academies
-- RR: pay equity, ESOP trends, recognition programs, total rewards benchmarking  
-- DEI: gender parity, LGBTQ+ inclusion, accessibility, unconscious bias training
-- COMP: labor law amendments, PF/ESI compliance, POSH Act, employment contracts
-- WELL: mental health EAPs, burnout prevention, flexible work, financial wellness
-- TECH: AI in HR, HRMS trends, chatbots for HR, blockchain credentials
-- LEAD: CEO succession, culture building, psychological safety, executive coaching
-- GLOB: hybrid work policies, cross-border hiring, geopolitical HR impact, expat management
-- CAREER: HR interview tips, case study frameworks, HR certifications (SHRM-CP, PHRi), salary benchmarks
-
-Make all summaries rich, data-driven, and relevant to Indian and global HR context.`
+4 unique topics per category:
+TA: skill-based hiring vs degree, AI screening tools ROI, employer brand on LinkedIn, structured interviewing
+HRBP: HRBP transitioning to strategic role, org design post-merger, HR OKRs, people strategy alignment
+MIS: predictive attrition models, HR dashboard design, workforce cost analytics, people data governance
+LD: GenAI skills training at scale, 70-20-10 learning model revival, LXP adoption, manager capability building
+RR: pay transparency legislation, total rewards post-inflation, ESOP for startups, spot recognition ROI
+DEI: gender pay audit methodology, disability inclusion in hiring, allyship programs, DEI metrics framework
+COMP: India new labour codes 2025 update, POSH Act internal committee, gig worker rights, PF automation
+WELL: burnout measurement tools, EAP utilisation data, 4-day workweek pilot results, financial wellness ROI
+TECH: AI copilots in HR, legacy HRMS migration, HR chatbot adoption, ethical AI in hiring
+LEAD: toxic manager identification, CEO succession rate, hybrid team leadership, psychological safety ROI
+GLOB: remote work visa policies, India GCC talent war, cross-border payroll compliance, DEI global benchmarks
+CAREER: SHRM-CP vs PHRi comparison, HR case interview structure, HR analyst salary 2025, building HR portfolio`
 
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`,
     {
-      method: 'POST', signal,
+      method: 'POST',
+      signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.9, maxOutputTokens: 16384 }
+        generationConfig: { temperature: 0.85, maxOutputTokens: 32768 }
       })
     }
   )
@@ -109,19 +135,23 @@ Make all summaries rich, data-driven, and relevant to Indian and global HR conte
     const e = await res.json().catch(() => ({}))
     throw new Error(e?.error?.message || `API error ${res.status}`)
   }
+
   const data = await res.json()
   const raw  = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
   const clean = raw.replace(/```json|```/g, '').trim()
   const jsonStart = clean.indexOf('[')
   const jsonEnd   = clean.lastIndexOf(']')
-  if (jsonStart === -1 || jsonEnd === -1) throw new Error('Invalid JSON response from Gemini')
+  if (jsonStart === -1 || jsonEnd === -1) throw new Error('Gemini returned invalid JSON')
+
   const articles = JSON.parse(clean.slice(jsonStart, jsonEnd + 1))
 
-  // Ensure each article has a real URL fallback
+  // Guarantee every article has a usable URL — use source homepage if Gemini skips it
   return articles.map((a, i) => ({
     ...a,
-    id: a.id || `art_${dateStr}_${String(i+1).padStart(3,'0')}`,
-    url: (a.url && a.url !== '#' && a.url.startsWith('http')) ? a.url : (SOURCE_URLS[a.source] || '#'),
+    id: a.id || `art_${dateStr}_${String(i + 1).padStart(3, '0')}`,
+    url: (a.url && a.url !== '#' && a.url.startsWith('http'))
+      ? a.url
+      : (SOURCE_URLS[a.source] || 'https://www.shrm.org/topics-tools/news'),
   }))
 }
 
@@ -131,30 +161,26 @@ function loadNewsForDate(d) {
 }
 function saveNewsForDate(d, articles) {
   try { localStorage.setItem(newsKey(d), JSON.stringify(articles)) } catch {}
-  // Prune anything older than 8 days
-  for (let i = 8; i < 14; i++) {
+  for (let i = 8; i < 15; i++) {
     const old = new Date(); old.setDate(old.getDate() - i)
     localStorage.removeItem(newsKey(old.toISOString().split('T')[0]))
   }
 }
-function loadNotes()    { try { return JSON.parse(localStorage.getItem(NOTES_KEY) || '[]') } catch { return [] } }
-function saveNotes(n)   { try { localStorage.setItem(NOTES_KEY, JSON.stringify(n)) } catch {} }
-function loadSaved()    { try { return JSON.parse(localStorage.getItem(SAVED_KEY) || '[]') } catch { return [] } }
-function saveSavedIds(s){ try { localStorage.setItem(SAVED_KEY, JSON.stringify(s)) } catch {} }
+function loadNotes()     { try { return JSON.parse(localStorage.getItem(NOTES_KEY) || '[]') } catch { return [] } }
+function saveNotes(n)    { try { localStorage.setItem(NOTES_KEY, JSON.stringify(n)) } catch {} }
+function loadSaved()     { try { return JSON.parse(localStorage.getItem(SAVED_KEY) || '[]') } catch { return [] } }
+function saveSavedIds(s) { try { localStorage.setItem(SAVED_KEY, JSON.stringify(s)) } catch {} }
 
-// ── Time tracker ──────────────────────────────────────
 function loadTodayTime() {
   try {
     const raw = JSON.parse(localStorage.getItem(TIME_KEY) || 'null')
-    if (raw?.date === todayStr()) return raw.seconds || 0
-    return 0
+    return (raw?.date === todayStr()) ? (raw.seconds || 0) : 0
   } catch { return 0 }
 }
 function saveTodayTime(s) {
   try { localStorage.setItem(TIME_KEY, JSON.stringify({ date: todayStr(), seconds: s })) } catch {}
 }
 
-// ── Past 7 days list ──────────────────────────────────
 function getPastDays(n = 7) {
   return Array.from({ length: n }, (_, i) => {
     const d = new Date(); d.setDate(d.getDate() - i)
@@ -170,101 +196,117 @@ export default function App() {
   const [activeTab,   setActiveTab]   = useState('all')
   const [viewDate,    setViewDate]    = useState(todayStr())
   const [searchQuery, setSearchQuery] = useState('')
-  const [articles,    setArticles]    = useState([])
+
+  // Per-date article cache in state — key: dateStr, value: articles[]
+  const [articlesByDate, setArticlesByDate] = useState({})
+  const [loadingDate,    setLoadingDate]    = useState(null)  // which date is loading
+  const [errorByDate,    setErrorByDate]    = useState({})
+
   const [savedIds,    setSavedIds]    = useState(loadSaved)
   const [notes,       setNotes]       = useState(loadNotes)
-  const [loading,     setLoading]     = useState(false)
-  const [loadPhase,   setLoadPhase]   = useState('')
-  const [error,       setError]       = useState(null)
   const [lastRefresh, setLastRefresh] = useState(null)
   const [toasts,      setToasts]      = useState([])
   const [sessionSec,  setSessionSec]  = useState(loadTodayTime)
   const abortRef = useRef(null)
 
-  // ── Theme ──────────────────────────────────────────
+  // Theme
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
     localStorage.setItem(THEME_KEY, theme)
   }, [theme])
 
-  // ── Persist ───────────────────────────────────────
+  // Persist
   useEffect(() => { saveSavedIds(savedIds) }, [savedIds])
   useEffect(() => { saveNotes(notes) }, [notes])
 
-  // ── Time tracker ──────────────────────────────────
+  // Timer
   useEffect(() => {
-    const t = setInterval(() => {
-      setSessionSec(s => {
-        const next = s + 1
-        saveTodayTime(next)
-        return next
-      })
-    }, 1000)
+    const t = setInterval(() => setSessionSec(s => { const n = s+1; saveTodayTime(n); return n }), 1000)
     return () => clearInterval(t)
   }, [])
 
-  // ── Toast ─────────────────────────────────────────
+  // Toast
   const toast = useCallback((msg, type = 'info') => {
     const id = Date.now()
     setToasts(p => [...p, { id, msg, type }])
     setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 3200)
   }, [])
 
-  // ── Fetch news ────────────────────────────────────
+  // Fetch news for a specific date
   const fetchNews = useCallback(async (date, force = false) => {
     if (!apiKey) return
+
+    // Already loading this date
+    if (loadingDate === date && !force) return
+
+    // Check in-memory cache first
+    if (!force && articlesByDate[date]?.length > 0) return
+
+    // Check localStorage
     if (!force) {
       const cached = loadNewsForDate(date)
       if (cached && cached.length > 0) {
-        setArticles(cached)
-        setLastRefresh(new Date())
+        setArticlesByDate(prev => ({ ...prev, [date]: cached }))
         return
       }
     }
+
+    // Cancel any in-flight request
     if (abortRef.current) abortRef.current.abort()
     abortRef.current = new AbortController()
-    setLoading(true)
-    setError(null)
-    setLoadPhase('Connecting to intelligence sources…')
-    setTimeout(() => setLoadPhase('Curating articles across 12 HR domains…'), 1500)
-    setTimeout(() => setLoadPhase('Verifying facts, deduplicating…'), 3500)
-    setTimeout(() => setLoadPhase('Building your daily brief…'), 5500)
+
+    setLoadingDate(date)
+    setErrorByDate(prev => ({ ...prev, [date]: null }))
+
     try {
       const data = await fetchNewsFromGemini(apiKey, date, abortRef.current.signal)
-      setArticles(data)
+      setArticlesByDate(prev => ({ ...prev, [date]: data }))
       saveNewsForDate(date, data)
       setLastRefresh(new Date())
-      toast(`${data.length} articles loaded for ${date}`, 'success')
+      toast(`${data.length} articles loaded`, 'success')
     } catch (e) {
-      if (e.name !== 'AbortError') { setError(e.message); toast('Failed to load news', 'error') }
+      if (e.name !== 'AbortError') {
+        setErrorByDate(prev => ({ ...prev, [date]: e.message }))
+        toast('Failed to load — ' + e.message, 'error')
+      }
     } finally {
-      setLoading(false)
-      setLoadPhase('')
+      setLoadingDate(null)
     }
-  }, [apiKey, toast])
+  }, [apiKey, articlesByDate, loadingDate, toast])
 
+  // Auto-fetch when date changes or apiKey set
   useEffect(() => {
-    if (apiKey) fetchNews(viewDate, false)
+    if (apiKey && viewDate) fetchNews(viewDate, false)
   }, [apiKey, viewDate]) // eslint-disable-line
 
-  // ── Computed articles ─────────────────────────────
-  const filteredArticles = articles.filter(a => {
+  // Current articles (for the viewed date)
+  const currentArticles = articlesByDate[viewDate] || []
+  const isLoading = loadingDate === viewDate
+  const currentError = errorByDate[viewDate] || null
+
+  // Filtered articles
+  const filteredArticles = currentArticles.filter(a => {
     if (activeTab === 'saved' && !savedIds.includes(a.id)) return false
     if (activeTab !== 'all' && activeTab !== 'saved' && a.category !== activeTab) return false
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase()
-      return a.title.toLowerCase().includes(q) || a.summary.toLowerCase().includes(q) || a.source.toLowerCase().includes(q)
+      return a.title.toLowerCase().includes(q) ||
+             a.summary.toLowerCase().includes(q) ||
+             a.source.toLowerCase().includes(q)
     }
     return true
   })
 
+  // Counts always based on current articles — never blocked by loading
   const counts = CATEGORIES.reduce((acc, c) => {
-    acc[c.id] = c.id === 'all' ? articles.length : articles.filter(a => a.category === c.id).length
+    acc[c.id] = c.id === 'all'
+      ? currentArticles.length
+      : currentArticles.filter(a => a.category === c.id).length
     return acc
   }, { saved: savedIds.length })
 
-  // ── Actions ───────────────────────────────────────
-  const toggleSave = useCallback(id => setSavedIds(p => p.includes(id) ? p.filter(x=>x!==id) : [...p,id]), [])
+  const toggleSave = useCallback(id =>
+    setSavedIds(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]), [])
 
   const createNote = useCallback(n => {
     const note = { ...n, id:'note_'+Date.now(), createdAt:new Date().toISOString(), updatedAt:new Date().toISOString() }
@@ -279,7 +321,7 @@ export default function App() {
   }, [toast])
 
   const deleteNote = useCallback(id => {
-    setNotes(p => p.filter(n=>n.id!==id))
+    setNotes(p => p.filter(n => n.id !== id))
     toast('Note deleted', 'error')
   }, [toast])
 
@@ -292,24 +334,24 @@ export default function App() {
 
   function clearKey() {
     localStorage.removeItem(APIKEY_KEY)
-    setApiKey(''); setArticles([]); setKeyInput('')
+    setApiKey(''); setArticlesByDate({}); setKeyInput('')
   }
 
-  // ── API Key setup screen ───────────────────────────
+  // ── API Key setup screen ──────────────────────────
   if (!apiKey) {
     return (
       <div className="setup-screen">
         <div className="setup-box">
           <div className="setup-logo">HR <span>Intel</span></div>
           <p style={{ fontSize:13, color:'var(--text-secondary)', lineHeight:1.7, fontFamily:'var(--font-body)' }}>
-            Your daily HR command centre — 36 curated articles across 12 domains, personal notes, and archive.
+            48 curated HR articles daily across 12 domains, personal notes, 7-day archive, and time tracking.
             Enter your <strong>Gemini API key</strong> to begin.
           </p>
           <div className="form-group">
             <label className="form-label">Gemini API Key</label>
             <input className="form-input" type="password" placeholder="AIzaSy..."
-              value={keyInput} onChange={e=>setKeyInput(e.target.value)}
-              onKeyDown={e=>e.key==='Enter'&&saveKey()} autoFocus />
+              value={keyInput} onChange={e => setKeyInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && saveKey()} autoFocus />
           </div>
           <button className="btn btn-primary" onClick={saveKey} disabled={!keyInput.trim()}
             style={{ width:'100%', justifyContent:'center', padding:'12px' }}>
@@ -319,7 +361,7 @@ export default function App() {
             Free key at{' '}
             <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer"
               style={{ color:'var(--accent)' }}>aistudio.google.com</a>
-            {' '}· Stored locally, never shared
+            {' '}· Stored in your browser only
           </p>
         </div>
       </div>
@@ -332,22 +374,31 @@ export default function App() {
         theme={theme} setTheme={setTheme}
         searchQuery={searchQuery} setSearchQuery={setSearchQuery}
         onRefresh={() => fetchNews(viewDate, true)}
-        loading={loading} lastRefresh={lastRefresh}
+        loading={isLoading} lastRefresh={lastRefresh}
         onClearKey={clearKey} sessionSec={sessionSec}
       />
       <div className="app-body">
+        {/* Sidebar is ALWAYS rendered — never blocked by loading state */}
         <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} counts={counts} />
         <main className="main-content">
           {activeTab === 'notes' ? (
-            <NotesPanel notes={notes} onCreate={createNote} onUpdate={updateNote} onDelete={deleteNote} searchQuery={searchQuery} />
+            <NotesPanel
+              notes={notes} onCreate={createNote}
+              onUpdate={updateNote} onDelete={deleteNote}
+              searchQuery={searchQuery}
+            />
           ) : (
             <NewsFeed
-              articles={filteredArticles} activeTab={activeTab}
-              savedIds={savedIds} onToggleSave={toggleSave}
-              loading={loading} loadPhase={loadPhase} error={error}
+              articles={filteredArticles}
+              activeTab={activeTab}
+              savedIds={savedIds}
+              onToggleSave={toggleSave}
+              loading={isLoading}
+              error={currentError}
               onRetry={() => fetchNews(viewDate, true)}
               searchQuery={searchQuery}
-              viewDate={viewDate} setViewDate={d => { setViewDate(d); setActiveTab('all') }}
+              viewDate={viewDate}
+              setViewDate={d => { setViewDate(d); setActiveTab('all') }}
               pastDays={getPastDays(7)}
             />
           )}
