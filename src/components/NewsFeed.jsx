@@ -72,11 +72,45 @@ export default function NewsFeed({
 
       {/* ── Error state ── */}
       {!loading && error && (
-        <div className="state-screen">
+        <div className="state-screen" style={{ maxWidth: 580, margin: '0 auto' }}>
           <AlertCircle size={44} color="var(--accent)" />
           <div className="state-title">Couldn't load articles</div>
-          <div className="state-subtitle">{error}</div>
-          <button className="btn btn-primary" onClick={onRetry}><RefreshCw size={13}/> Retry</button>
+
+          {/* Human-readable reason */}
+          <div style={{
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--border)',
+            borderLeft: '3px solid var(--accent)',
+            borderRadius: 'var(--radius-sm)',
+            padding: '12px 16px',
+            width: '100%',
+            textAlign: 'left',
+          }}>
+            <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 700,
+              letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--accent)', marginBottom: 6 }}>
+              What went wrong
+            </div>
+            <div style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)',
+              lineHeight: 1.7, wordBreak: 'break-word' }}>
+              {error}
+            </div>
+          </div>
+
+          {/* What to do */}
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', lineHeight: 1.7 }}>
+            This is almost always a temporary Gemini response issue.<br/>
+            Your notes and saved articles are completely safe.<br/>
+            Clicking Retry triggers 2 automatic attempts.
+          </div>
+
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button className="btn btn-primary" onClick={onRetry}>
+              <RefreshCw size={13}/> Retry (auto x2)
+            </button>
+            <button className="btn btn-secondary" onClick={() => window.location.reload()}>
+              Hard Reload
+            </button>
+          </div>
         </div>
       )}
 
