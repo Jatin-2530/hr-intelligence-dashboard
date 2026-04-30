@@ -147,7 +147,7 @@ export default function NewsFeed({
                   <NewsCard
                     key={a.id}
                     article={a}
-                    isSaved={savedIds.includes(a.id)}
+                    isSaved={savedIds.has(a.id)}
                     onToggleSave={onToggleSave}
                     onOpen={setOpenArticle}
                     searchQuery={searchQuery}
@@ -164,7 +164,7 @@ export default function NewsFeed({
       {openArticle && (
         <ArticleModal
           article={openArticle}
-          isSaved={savedIds.includes(openArticle.id)}
+          isSaved={savedIds.has(openArticle.id)}
           onToggleSave={onToggleSave}
           onClose={() => setOpenArticle(null)}
         />
