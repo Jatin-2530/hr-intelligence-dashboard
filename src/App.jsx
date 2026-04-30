@@ -65,7 +65,10 @@ export const CAT_SHORT = {
   LEAD:'LEAD', GLOB:'GLOB', CAREER:'CAREER',
 }
 
-// ── Dedup helpers ─────────────────────────────────────
+// ── Similarity engine — Jaccard coefficient on word sets ──
+// Strips stopwords, punctuation, numbers then computes
+// |intersection| / |union| — returns 0.0 to 1.0
+
 const STOP_WORDS = new Set([
   'about','their','which','would','could','should','through','across',
   'between','within','while','where','those','these','there','have',
@@ -73,8 +76,35 @@ const STOP_WORDS = new Set([
   'company','firms','using','based','after','human','resource','resources',
   'management','global','report','study','survey','shows','reveals','finds',
   'found','according','percent','annual','latest','sector','market',
+  'talent','hiring','employee','workforce','workplace','organization',
+  'business','leader','people','teams','skills','work','roles','data',
+  'strategy','growth','change','digital','learning','performance',
+  'new','year','says','more','than','into','also','over','when',
+  'what','your','they','were','does','make','just','know','take',
 ])
 
+function tokenise(text) {
+  return new Set(
+    text.toLowerCase()
+      .replace(/[^a-z\s]/g, ' ')   // strip punctuation/numbers
+      .split(/\s+/)
+      .filter(w => w.length > 3 && !STOP_WORDS.has(w))
+  )
+}
+
+function jaccardSimilarity(textA, textB) {
+  const a = tokenise(textA)
+  const b = tokenise(textB)
+  if (a.size === 0 || b.size === 0) return 0
+  const intersection = [...a].filter(w => b.has(w)).length
+  const union = new Set([...a, ...b]).size
+  return intersection / union
+}
+
+// DUPLICATE_THRESHOLD — 0.30 = 30% word overlap triggers duplicate flag
+const DUPLICATE_THRESHOLD = 0.30
+
+// Loads titles from last N days for cross-day dedup
 function getRecentTitles(daysBack = 5) {
   const titles = []
   for (let i = 1; i <= daysBack; i++) {
@@ -88,23 +118,64 @@ function getRecentTitles(daysBack = 5) {
   return titles
 }
 
+// Returns articles with a `dupScore` field added (0.0–1.0)
+// Articles >= DUPLICATE_THRESHOLD are filtered out
+// This runs on the COMBINED output of all 3 batches
 function deduplicateArticles(articles) {
-  const seen = []
-  return articles.filter(article => {
-    const words = new Set(
-      article.title.toLowerCase().split(/\s+/)
-        .filter(w => w.length > 4 && !STOP_WORDS.has(w))
-    )
-    const isDup = seen.some(prev => {
-      const prevWords = new Set(
-        prev.toLowerCase().split(/\s+/)
-          .filter(w => w.length > 4 && !STOP_WORDS.has(w))
-      )
-      const overlap = [...words].filter(w => prevWords.has(w))
-      return overlap.length >= 3
+  const accepted = []   // titles that passed
+  const result   = []
+
+  for (const article of articles) {
+    let maxSimilarity = 0
+
+    // Check against every already-accepted article
+    for (const seenTitle of accepted) {
+      const sim = jaccardSimilarity(article.title, seenTitle)
+      if (sim > maxSimilarity) maxSimilarity = sim
+      if (sim >= DUPLICATE_THRESHOLD) break  // early exit
+    }
+
+    const isDup = maxSimilarity >= DUPLICATE_THRESHOLD
+
+    // Always include article in result — flag duplicates visually
+    // instead of silently dropping them (helps debugging)
+    result.push({
+      ...article,
+      dupScore: Math.round(maxSimilarity * 100),  // e.g. 45 = 45% similar
+      isDuplicate: isDup,
     })
-    if (!isDup) { seen.push(article.title); return true }
-    return false
+
+    if (!isDup) accepted.push(article.title)
+  }
+
+  // Filter out duplicates — they're logged but not shown
+  const unique = result.filter(a => !a.isDuplicate)
+  const dupsRemoved = result.length - unique.length
+  if (dupsRemoved > 0) {
+    console.info(
+      '[HR Intel] Dedup removed ' + dupsRemoved + ' duplicate(s) at ' +
+      (DUPLICATE_THRESHOLD * 100) + '% similarity threshold'
+    )
+  }
+  return unique
+}
+
+// Cross-day dedup — checks new articles against last 5 days
+// Returns articles that are NOT similar to any recent one
+function crossDayDedup(articles, recentTitles) {
+  if (recentTitles.length === 0) return articles
+  return articles.filter(article => {
+    for (const recentTitle of recentTitles) {
+      const sim = jaccardSimilarity(article.title, recentTitle)
+      if (sim >= DUPLICATE_THRESHOLD) {
+        console.info(
+          '[HR Intel] Cross-day dup removed: "' + article.title +
+          '" (' + Math.round(sim*100) + '% similar to "' + recentTitle + '")'
+        )
+        return false
+      }
+    }
+    return true
   })
 }
 
@@ -143,54 +214,43 @@ function safeParseJSON(raw) {
 }
 
 // ── Gemini API ────────────────────────────────────────
-async function fetchNewsFromGemini(apiKey, dateStr, signal) {
+
+// Single batch call — asks for exactly the categories given
+async function fetchBatch(apiKey, dateStr, signal, categories, batchNum, forbiddenBlock) {
   const displayDate = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', {
     weekday:'long', year:'numeric', month:'long', day:'numeric'
   })
 
-  const recentTitles = getRecentTitles(5)
-  const forbiddenBlock = recentTitles.length > 0
-    ? `\nFORBIDDEN — already covered in last 5 days, do NOT repeat these topics or companies:\n${recentTitles.slice(0,30).map((t,i) => `${i+1}. ${t}`).join('\n')}\n`
-    : ''
+  const catList = categories.join(', ')
+  const count   = categories.length * 4  // 4 per category
 
-  const prompt = `You are a senior HR intelligence journalist. Generate 36 unique HR news articles for ${displayDate}.
+  const prompt = `You are an HR journalist. Generate ${count} HR news articles for ${displayDate}.
 ${forbiddenBlock}
-RULES — follow strictly:
-- Return a raw JSON array only. Zero markdown. Zero backticks. Start with [ end with ]
-- Exactly 3 articles per category: TA, HRBP, MIS, LD, RR, DEI, COMP, WELL, TECH, LEAD, GLOB, CAREER
-- Each summary must be 150-200 words — write 3 full paragraphs
-- Every article must name a different company (no repeats across 36 articles)
-- Every article must cite a specific named research report with year
-- URL must be a realistic full path for that source
+STRICT RULES:
+- Return RAW JSON array only. No markdown. No backticks. Start with [ end with ]
+- Exactly 4 articles per category for these categories: ${catList}
+- Each summary: 3 paragraphs, 150 words total: (1) key stat + company + report name+year (2) business context + second data point (3) actionable recommendation
+- Each article must name a DIFFERENT company — no repeats within this batch
+- URL must be a realistic full path for the source domain
 
 JSON per article:
-{
-  "id": "art_${dateStr}_001",
-  "title": "Specific headline with company or stat, max 14 words",
-  "summary": "Paragraph 1 (50-70 words): Core finding with exact stat and company name and report citation. Paragraph 2 (60-80 words): Business context, why it matters, second data point from different source, challenge for HR teams. Paragraph 3 (30-50 words): One specific actionable recommendation for an HR practitioner or student.",
-  "source": "SHRM or Harvard Business Review or People Matters or HR Dive or McKinsey & Company or Deloitte Insights or LinkedIn Talent Solutions or Gartner HR or MIT Sloan Management Review or Economic Times HR or Business Today or Workforce Magazine or NASSCOM or Josh Bersin Academy",
-  "url": "https://realistic-source-domain.com/realistic/path/matching/article/topic",
-  "date": "${dateStr}",
-  "category": "TA",
-  "readTime": 5,
-  "keyInsight": "Single most important stat or takeaway under 15 words"
-}
+{"id":"art_${dateStr}_${batchNum}_001","title":"Specific headline max 14 words","summary":"150 word summary here","source":"SHRM or Harvard Business Review or People Matters or HR Dive or McKinsey & Company or Deloitte Insights or LinkedIn Talent Solutions or Gartner HR or MIT Sloan Management Review or Economic Times HR or Business Today or Workforce Magazine or NASSCOM or Josh Bersin Academy","url":"https://source-domain.com/realistic/path","date":"${dateStr}","category":"${categories[0]}","readTime":5,"keyInsight":"Key stat under 15 words"}
 
-3 distinct topics per category:
-TA: skill-based hiring, AI screening tools, employer branding
-HRBP: strategic HRBP role, workforce planning, change management
-MIS: attrition prediction, HR dashboards, people data governance
-LD: GenAI upskilling, 70-20-10 model, LXP adoption
-RR: pay transparency, total rewards redesign, ESOP trends
-DEI: gender pay audit, disability inclusion, DEI metrics
-COMP: India Labour Codes, POSH compliance, gig worker rights
-WELL: burnout indicators, EAP utilisation, 4-day workweek
-TECH: AI HRMS copilot, legacy system migration, HR chatbots
-LEAD: toxic manager detection, CEO succession, psychological safety
-GLOB: digital nomad visas, India GCC talent, cross-border payroll
-CAREER: SHRM-CP vs PHRi, HR case interview, HR salary benchmarks
+Categories and 4 unique topics each (cover all 4):
+TA: skill-based hiring, AI candidate screening, employer branding ROI, campus hiring strategy
+HRBP: strategic HRBP evolution, workforce planning, org design post-merger, HR OKRs
+MIS: attrition prediction models, HR dashboards, people data governance, workforce cost analytics
+LD: GenAI upskilling, 70-20-10 model, LXP vs LMS, manager capability programs
+RR: pay transparency laws, total rewards redesign, ESOP for startups, recognition program ROI
+DEI: gender pay audit, disability inclusion hiring, allyship programs, DEI accountability metrics
+COMP: India Labour Codes 2025, POSH Act compliance, gig worker classification, EPF automation
+WELL: burnout early warning, EAP utilisation rates, 4-day workweek pilots, financial wellness ROI
+TECH: AI HRMS copilot, legacy SAP migration, HR chatbot deflection, ethical AI in hiring
+LEAD: toxic manager detection, CEO succession failures, hybrid team leadership, psychological safety
+GLOB: digital nomad visa policies, India GCC talent war, cross-border payroll, global DEI benchmarks
+CAREER: SHRM-CP vs PHRi decision, HR case interview framework, HR salary benchmarks 2025, HR portfolio
 
-Use each company only once across all 36: Infosys TCS Wipro HCL Accenture Microsoft Google Amazon Tata Reliance HDFC Zomato Flipkart PhonePe Mahindra Bajaj HUL ITC Deloitte KPMG PwC EY Aon Mercer Nestle Asian-Paints L&T Byju's Swiggy Ola`
+Companies (use each only once across batch): Infosys TCS Wipro HCL Accenture Microsoft Google Amazon Tata Reliance HDFC Zomato Flipkart PhonePe Mahindra Bajaj HUL ITC Deloitte KPMG PwC EY Aon Mercer Nestle L&T Byju's Swiggy`
 
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`,
@@ -210,27 +270,74 @@ Use each company only once across all 36: Infosys TCS Wipro HCL Accenture Micros
   }
 
   const data = await res.json()
-  const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
-  if (!raw) throw new Error('Gemini returned an empty response — please retry')
+  const raw  = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+  if (!raw) throw new Error('Gemini returned empty response')
 
   const parsed = safeParseJSON(raw)
-
   if (!Array.isArray(parsed) || parsed.length === 0)
-    throw new Error('Gemini returned no articles — please retry')
+    throw new Error('Gemini returned no articles')
 
-  const normalised = parsed
-    .filter(a => a && a.title && a.summary)
+  return parsed
+    .filter(a => a && a.title && a.summary && categories.includes(a.category))
     .map((a, i) => ({
       ...a,
-      id:       a.id       || `art_${dateStr}_${String(i+1).padStart(3,'0')}`,
-      category: a.category || 'TA',
+      id: `art_${dateStr}_b${batchNum}_${String(i+1).padStart(3,'0')}`,
+      category: a.category || categories[0],
       date:     a.date     || dateStr,
       url: (a.url && a.url !== '#' && a.url.startsWith('http'))
         ? a.url
         : (SOURCE_URLS[a.source] || 'https://www.shrm.org/topics-tools/news'),
     }))
+}
 
-  return deduplicateArticles(normalised)
+// Main fetch — 3 parallel calls × 4 categories × 4 articles = 48 total
+async function fetchNewsFromGemini(apiKey, dateStr, signal) {
+  // Step 1: get last 5 days titles for cross-day dedup + prompt injection
+  const recentTitles = getRecentTitles(5)
+  const forbiddenBlock = recentTitles.length > 0
+    ? 'FORBIDDEN topics (covered last 5 days, do NOT repeat):\n' +
+      recentTitles.slice(0, 25).map((t, i) => (i+1) + '. ' + t).join('\n') + '\n'
+    : ''
+
+  const batch1Cats = ['TA','HRBP','MIS','LD']
+  const batch2Cats = ['RR','DEI','COMP','WELL']
+  const batch3Cats = ['TECH','LEAD','GLOB','CAREER']
+
+  // Step 2: fire all 3 batches in parallel
+  const [b1, b2, b3] = await Promise.allSettled([
+    fetchBatch(apiKey, dateStr, signal, batch1Cats, 1, forbiddenBlock),
+    fetchBatch(apiKey, dateStr, signal, batch2Cats, 2, forbiddenBlock),
+    fetchBatch(apiKey, dateStr, signal, batch3Cats, 3, forbiddenBlock),
+  ])
+
+  const a1 = b1.status === 'fulfilled' ? b1.value : []
+  const a2 = b2.status === 'fulfilled' ? b2.value : []
+  const a3 = b3.status === 'fulfilled' ? b3.value : []
+
+  if (a1.length === 0 && a2.length === 0 && a3.length === 0) {
+    const e1 = b1.status === 'rejected' ? b1.reason?.message : ''
+    const e2 = b2.status === 'rejected' ? b2.reason?.message : ''
+    const e3 = b3.status === 'rejected' ? b3.reason?.message : ''
+    throw new Error('All 3 batches failed. ' + [e1,e2,e3].filter(Boolean).join(' | '))
+  }
+
+  // Step 3: combine all batches
+  const combined = [...a1, ...a2, ...a3]
+
+  // Step 4: cross-day dedup — remove anything too similar to last 5 days
+  const afterCrossDay = crossDayDedup(combined, recentTitles)
+
+  // Step 5: same-day dedup — remove duplicates within today's articles
+  const final = deduplicateArticles(afterCrossDay)
+
+  console.info(
+    '[HR Intel] Fetch complete —',
+    'raw:', combined.length,
+    '| after cross-day dedup:', afterCrossDay.length,
+    '| after same-day dedup:', final.length
+  )
+
+  return final
 }
 
 // ── Storage helpers ───────────────────────────────────
